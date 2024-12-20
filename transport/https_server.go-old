@@ -1,0 +1,978 @@
+/*
+ * Copyright (c) 2024 doxx.net
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * "Commons Clause" License Condition v1.0
+ *
+ * The Software is provided to you by the Licensor under the License, as defined
+ * below, subject to the following condition.
+ *
+ * Without limiting other conditions in the License, the grant of rights under the
+ * License will not include, and the License does not grant to you, the right to
+ * Sell the Software.
+ *
+ * For purposes of the foregoing, "Sell" means practicing any or all of the rights
+ * granted to you under the License to provide to third parties, for a fee or other
+ * consideration (including without limitation fees for hosting or consulting/
+ * support services related to the Software), a product or service whose value
+ * derives, entirely or substantially, from the functionality of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+package transport
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/songgao/water"
+)
+
+var debug bool
+
+func SetDebug(enabled bool) {
+	debug = enabled
+}
+
+func debugLog(format string, v ...interface{}) {
+	if debug {
+		log.Printf("[HTTPS Server] "+format, v...)
+	}
+}
+
+type VPNUser struct {
+	AssignedIP string
+}
+
+type HTTPSTransportServer struct {
+	cert       tls.Certificate
+	server     *http.Server
+	sessions   map[string]*HTTPSSession
+	sessionsmu sync.RWMutex
+	connChan   chan net.Conn
+	running    bool
+	hostname   string
+	tun        *water.Interface
+	shutdown   chan struct{}
+	bwMonitor  *BandwidthMonitor
+}
+
+type HTTPSSession struct {
+	ID           string
+	Token        string
+	LastAccessed time.Time
+	ReadChan     chan []byte
+	WriteChan    chan []byte
+	Conn         *HTTPSVirtualConn
+	closed       chan struct{}
+	LastDataRead time.Time
+	tun          *water.Interface
+	ConnAddr     string
+	UserAgent    string
+	AssignedIP   string
+}
+
+type HTTPSVirtualConn struct {
+	session    *HTTPSSession
+	localAddr  net.Addr
+	remoteAddr net.Addr
+	readChan   chan []byte
+	writeChan  chan []byte
+	closed     chan struct{}
+	iface      *water.Interface
+}
+
+// Implement net.Conn interface
+func (c *HTTPSVirtualConn) Read(b []byte) (n int, err error) {
+	packet, err := c.ReadPacket()
+	if err != nil {
+		return 0, err
+	}
+	return copy(b, packet), nil
+}
+
+func (c *HTTPSVirtualConn) Write(b []byte) (n int, err error) {
+	err = c.WritePacket(b)
+	if err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+func (c *HTTPSVirtualConn) Close() error {
+	select {
+	case <-c.closed:
+		return nil
+	default:
+		close(c.closed)
+	}
+	return nil
+}
+
+func (c *HTTPSVirtualConn) LocalAddr() net.Addr {
+	return c.localAddr
+}
+
+func (c *HTTPSVirtualConn) RemoteAddr() net.Addr {
+	return c.remoteAddr
+}
+
+func (c *HTTPSVirtualConn) SetDeadline(t time.Time) error {
+	return nil // Optional implementation
+}
+
+func (c *HTTPSVirtualConn) SetReadDeadline(t time.Time) error {
+	return nil // Optional implementation
+}
+
+func (c *HTTPSVirtualConn) SetWriteDeadline(t time.Time) error {
+	return nil // Optional implementation
+}
+
+// Implement TransportConn interface
+func (c *HTTPSVirtualConn) ReadPacket() ([]byte, error) {
+	select {
+	case <-c.closed:
+		return nil, io.EOF
+	case packet := <-c.readChan:
+		return packet, nil
+	}
+}
+
+func (c *HTTPSVirtualConn) WritePacket(packet []byte) error {
+	select {
+	case <-c.closed:
+		return io.EOF
+	case c.writeChan <- packet:
+		return nil
+	}
+}
+
+func NewHTTPSTransportServer(certPath, keyPath string, hostname string) (*HTTPSTransportServer, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load certificate: %v", err)
+	}
+
+	return &HTTPSTransportServer{
+		cert:      cert,
+		sessions:  make(map[string]*HTTPSSession),
+		connChan:  make(chan net.Conn),
+		hostname:  hostname,
+		shutdown:  make(chan struct{}),
+		bwMonitor: NewBandwidthMonitor("https"),
+	}, nil
+}
+
+func (t *HTTPSTransportServer) Listen(addr string) error {
+	// Start HTTPS server
+	t.server = &http.Server{
+		Addr:    addr,
+		Handler: t,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{t.cert},
+			NextProtos:   []string{"http/1.1"}, // Force HTTP/1.1 only
+		},
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+	}
+
+	fmt.Printf("[HTTPS Server] Starting HTTPS server on %s\n", addr)
+	return t.server.ListenAndServeTLS("", "")
+}
+
+func (t *HTTPSTransportServer) Accept() (TransportConn, error) {
+	if !t.running {
+		return nil, fmt.Errorf("server not running")
+	}
+
+	select {
+	case conn := <-t.connChan:
+		return conn.(TransportConn), nil
+	case <-time.After(1 * time.Second):
+		if !t.running {
+			return nil, fmt.Errorf("server not running")
+		}
+		return nil, fmt.Errorf("accept timeout")
+	}
+}
+
+func (t *HTTPSTransportServer) Close() error {
+	t.sessionsmu.Lock()
+	for _, session := range t.sessions {
+		close(session.closed)
+		// Deactivate user via auth API
+		req, err := http.NewRequest("GET", fmt.Sprintf("https://auth.doxx.net/?deactivate&token=%s&server=%s",
+			session.Token, t.hostname), nil)
+		if err != nil {
+			fmt.Printf("[HTTPS Server] Error creating deactivate request: %v\n", err)
+			continue
+		}
+
+		req.Header.Set("X-Auth-Token", "doxx_server_auth_token_2024")
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Printf("[HTTPS Server] Error deactivating user: %v\n", err)
+			continue
+		}
+		resp.Body.Close()
+	}
+	t.sessions = make(map[string]*HTTPSSession)
+	t.sessionsmu.Unlock()
+
+	// Rest of the close method remains the same
+	if t.server != nil {
+		if err := t.server.Shutdown(context.Background()); err != nil {
+			fmt.Printf("[HTTPS Server] Error during shutdown: %v\n", err)
+		}
+	}
+
+	if t.tun != nil {
+		if err := t.tun.Close(); err != nil {
+			fmt.Printf("[HTTPS Server] Error closing TUN interface: %v\n", err)
+		}
+	}
+
+	fmt.Printf("[HTTPS Server] Shutdown complete\n")
+	return nil
+}
+
+func addCommonServerHeaders(w http.ResponseWriter) {
+	// Standard server headers
+	w.Header().Set("Server", "Apache/2.4.57 (Unix)")
+	w.Header().Set("X-Powered-By", "PHP/8.2.12")
+
+	// Security headers
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+
+	// Connection headers
+	w.Header().Set("Keep-Alive", "timeout=5, max=100")
+	w.Header().Set("Connection", "Keep-Alive")
+
+	// Cloudflare-specific headers
+	w.Header().Set("CF-Cache-Status", "BYPASS")
+	w.Header().Set("CF-RAY", "direct")
+	w.Header().Set("CF-Cache-Control", "no-cache, no-store, must-revalidate")
+
+	// Disable all compression
+	w.Header().Set("Accept-Encoding", "identity")
+	w.Header().Set("Content-Encoding", "identity")
+	w.Header().Del("Transfer-Encoding")
+	w.Header().Set("X-Compression", "disabled")
+	w.Header().Set("Cache-Control", "no-transform")
+
+	// Ensure no caching
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+const (
+	maxPacketBatchSize = 16
+	pollTimeout        = 20 * time.Millisecond
+	channelBufferSize  = 64
+)
+
+func (t *HTTPSTransportServer) handleAuth(w http.ResponseWriter, r *http.Request) {
+	debugLog("Handling auth request from %s", r.RemoteAddr)
+	addCommonServerHeaders(w)
+	sessionID := r.Header.Get("X-For")
+	if sessionID == "" {
+		log.Printf("[ERROR] Missing X-For header in auth request")
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	// Read token from request body
+	token, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read token from %s - Error: %v", r.RemoteAddr, err)
+		http.Error(w, "Failed to read token", http.StatusBadRequest)
+		return
+	}
+
+	debugLog("Auth request with token from %s", r.RemoteAddr)
+
+	// Check auth status via auth.doxx.net
+	authURL := fmt.Sprintf("https://auth.doxx.net/?authenticate&token=%s&server=%s",
+		string(token), t.hostname)
+	debugLog("Making auth request to: %s", authURL)
+
+	req, err := http.NewRequest("GET", authURL, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create auth request: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("X-Auth-Token", "doxx_server_auth_token_2024")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to authenticate: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Read and log the raw response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read auth response body: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	debugLog("Raw auth server response: %s", string(body))
+
+	var authResp struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		User    struct {
+			EmailAddress string `json:"email_address"`
+			AssignedIP   string `json:"assigned_ip"`
+			Active       bool   `json:"active"`
+			Server       string `json:"server"`
+		} `json:"user"`
+	}
+
+	if err := json.Unmarshal(body, &authResp); err != nil {
+		debugLog("Failed to decode auth response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Unescape the CIDR notation
+	assignedIP := strings.ReplaceAll(authResp.User.AssignedIP, `\/`, `/`)
+	debugLog("Unescaped CIDR: %s", assignedIP)
+
+	debugLog("Auth response for %s: status=%s, message=%s, active=%v, IP=%s",
+		r.RemoteAddr, authResp.Status, authResp.Message, authResp.User.Active, assignedIP)
+
+	if authResp.Status != "success" {
+		log.Printf("[ERROR] Authentication failed: %s", authResp.Message)
+		http.Error(w, authResp.Message, http.StatusUnauthorized)
+		return
+	}
+
+	// Parse the CIDR to get IP and prefix length
+	ip, ipNet, err := net.ParseCIDR(assignedIP)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse CIDR %s: %v", assignedIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	prefixLen, _ := ipNet.Mask.Size()
+
+	// Create TUN interface if it doesn't exist
+	if t.tun == nil {
+		config := water.Config{
+			DeviceType: water.TUN,
+		}
+		t.tun, err = water.New(config)
+		if err != nil {
+			log.Printf("[ERROR] Failed to create TUN interface: %v", err)
+			http.Error(w, "Failed to create TUN interface", http.StatusInternalServerError)
+			return
+		}
+
+		// Configure the TUN interface
+		if err := setupTUN(t.tun.Name(), ipNet.IP.String(), ip.String(), prefixLen); err != nil {
+			log.Printf("[ERROR] Failed to configure TUN interface: %v", err)
+			http.Error(w, "Failed to configure TUN interface", http.StatusInternalServerError)
+			return
+		}
+
+		debugLog("Created and configured TUN interface %s", t.tun.Name())
+	}
+
+	// Store session information with unescaped CIDR and TUN interface
+	t.sessionsmu.Lock()
+	t.sessions[sessionID] = &HTTPSSession{
+		ID:           sessionID,
+		Token:        string(token),
+		LastAccessed: time.Now(),
+		ReadChan:     make(chan []byte, channelBufferSize),
+		WriteChan:    make(chan []byte, channelBufferSize),
+		Conn:         &HTTPSVirtualConn{},
+		closed:       make(chan struct{}),
+		AssignedIP:   assignedIP,
+		tun:          t.tun,
+	}
+	t.sessionsmu.Unlock()
+
+	log.Printf("[INFO] New HTTPS client authenticated from %s with session %s", r.RemoteAddr, sessionID)
+
+	// Start packet forwarding between TUN and client session
+	t.sessionsmu.RLock()
+	session := t.sessions[sessionID]
+	t.sessionsmu.RUnlock()
+
+	go func() {
+		packet := make([]byte, MTU)
+		for {
+			n, err := t.tun.Read(packet)
+			if err != nil {
+				log.Printf("[ERROR] Error reading from TUN: %v", err)
+				return
+			}
+
+			select {
+			case <-session.closed:
+				return
+			case session.ReadChan <- packet[:n]:
+				// Packet sent successfully
+			default:
+				// Channel full, drop packet silently
+			}
+		}
+	}()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (t *HTTPSTransportServer) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	addCommonServerHeaders(w)
+	sessionID := r.Header.Get("X-For")
+	if sessionID == "" {
+		log.Printf("[ERROR] Missing X-For header in auth status request")
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	t.sessionsmu.RLock()
+	session, exists := t.sessions[sessionID]
+	t.sessionsmu.RUnlock()
+
+	if !exists {
+		log.Printf("[ERROR] Session not found: %s", sessionID)
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	// Check auth status via auth.doxx.net
+	req, err := http.NewRequest("GET", fmt.Sprintf("https://auth.doxx.net/?auth_status&token=%s&server=%s",
+		session.Token, t.hostname), nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("X-Auth-Token", "doxx_server_auth_token_2024")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to check auth status: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	var authResp struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Active  bool   `json:"active"`
+		IP      string `json:"ip"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		log.Printf("[ERROR] Failed to decode response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if authResp.Status != "success" {
+		log.Printf("[ERROR] Auth status check failed: %s", authResp.Message)
+		http.Error(w, authResp.Message, http.StatusUnauthorized)
+		return
+	}
+
+	// Parse the stored CIDR to get IP and prefix length
+	ip, ipNet, err := net.ParseCIDR(session.AssignedIP)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse CIDR %s: %v", session.AssignedIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	prefixLen, _ := ipNet.Mask.Size()
+
+	// Return full VPN configuration
+	response := struct {
+		Active     bool   `json:"active"`
+		IP         string `json:"ip"`
+		ServerIP   string `json:"server_ip"`
+		ClientIP   string `json:"client_ip"`
+		PrefixLen  int    `json:"prefix_len"`
+		AssignedIP string `json:"assigned_ip"`
+	}{
+		Active:     authResp.Active,
+		IP:         authResp.IP,
+		ServerIP:   ipNet.IP.String(),
+		ClientIP:   ip.String(),
+		PrefixLen:  prefixLen,
+		AssignedIP: session.AssignedIP,
+	}
+
+	debugLog("Sending auth status response: %+v", response)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (t *HTTPSTransportServer) handlePoll(w http.ResponseWriter, r *http.Request) {
+	debugLog("Handling poll request from %s", r.RemoteAddr)
+	addCommonServerHeaders(w)
+	sessionID := r.Header.Get("X-For")
+	if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	t.sessionsmu.RLock()
+	session, exists := t.sessions[sessionID]
+	t.sessionsmu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	// Update timestamps
+	session.LastAccessed = time.Now()
+
+	select {
+	case packet := <-session.ReadChan:
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(packet)
+	case <-time.After(pollTimeout):
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (t *HTTPSTransportServer) handleWrite(w http.ResponseWriter, r *http.Request) {
+	debugLog("Handling write request from %s", r.RemoteAddr)
+	addCommonServerHeaders(w)
+	sessionID := r.Header.Get("X-For")
+	if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	t.sessionsmu.RLock()
+	session, exists := t.sessions[sessionID]
+	t.sessionsmu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if TUN interface exists
+	if session.tun == nil {
+		debugLog("Error: TUN interface not initialized for session %s", sessionID)
+		http.Error(w, "Session not properly initialized", http.StatusInternalServerError)
+		return
+	}
+
+	// Read the entire packet
+	packet, err := io.ReadAll(r.Body)
+	if err != nil {
+		debugLog("Failed to read request body: %v", err)
+		http.Error(w, "Failed to read packet", http.StatusBadRequest)
+		return
+	}
+
+	// Basic IP packet validation
+	if len(packet) < 20 {
+		debugLog("Packet too short: %d bytes", len(packet))
+		http.Error(w, "Invalid packet length", http.StatusBadRequest)
+		return
+	}
+
+	// Get IP header length
+	ihl := (packet[0] & 0x0F) * 4
+	if ihl < 20 {
+		debugLog("Invalid IP header length: %d", ihl)
+		http.Error(w, "Invalid IP header", http.StatusBadRequest)
+		return
+	}
+
+	// Get total length from IP header
+	totalLen := int(packet[2])<<8 | int(packet[3])
+	if totalLen > len(packet) {
+		debugLog("Packet truncated: expected %d bytes, got %d", totalLen, len(packet))
+		http.Error(w, "Truncated packet", http.StatusBadRequest)
+		return
+	}
+
+	// Write only the valid portion of the packet
+	if _, err := session.tun.Write(packet[:totalLen]); err != nil {
+		debugLog("Failed to write to TUN: %v", err)
+		http.Error(w, "TUN write failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (t *HTTPSTransportServer) cleanupSessions() {
+	ticker := time.NewTicker(5 * time.Minute)
+	for range ticker.C {
+		t.sessionsmu.Lock()
+		for id, session := range t.sessions {
+			if time.Since(session.LastAccessed) > 10*time.Minute {
+				close(session.ReadChan)
+				close(session.WriteChan)
+				delete(t.sessions, id)
+			}
+		}
+		t.sessionsmu.Unlock()
+	}
+}
+
+func (t *HTTPSTransportServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	endpoint := getEndpointFromPath(r.URL.Path)
+
+	// Handle root path with redirect
+	if r.URL.Path == "/" {
+		addCommonServerHeaders(w)
+		w.Header().Set("Location", "https://github.com/doxx/doxx.net")
+		w.WriteHeader(http.StatusFound) // 302 Found
+		return
+	}
+
+	if endpoint == "" {
+		fmt.Printf("[HTTPS Server] No endpoint handler found for path: %s\n", r.URL.Path)
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	switch endpoint {
+	case "auth":
+		t.handleAuth(w, r)
+	case "auth_status":
+		t.handleAuthStatus(w, r)
+	case "read", "poll":
+		t.handlePoll(w, r)
+	case "write":
+		t.handleWrite(w, r)
+	}
+}
+
+func setupTUN(name, ip, remote string, prefixLen int) error {
+	debugLog("Setting up TUN interface %s with IP %s/%d and peer %s", name, ip, prefixLen, remote)
+
+	// First, flush any existing configuration
+	clearCmd := exec.Command("ip", "addr", "flush", "dev", name)
+	if err := clearCmd.Run(); err != nil {
+		debugLog("Warning: failed to flush interface: %v", err)
+	}
+
+	// Add IP address with proper CIDR and peer
+	addCmd := exec.Command("ip", "addr", "add",
+		fmt.Sprintf("%s/%d", ip, prefixLen),
+		"peer", remote,
+		"dev", name)
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("error setting IP address: %v\nOutput: %s", err, string(out))
+	}
+
+	// Bring interface up
+	upCmd := exec.Command("ip", "link", "set", "dev", name, "up")
+	if err := upCmd.Run(); err != nil {
+		return fmt.Errorf("failed to set interface up: %v", err)
+	}
+
+	// Add explicit route to client
+	routeCmd := exec.Command("ip", "route", "add",
+		fmt.Sprintf("%s/32", remote),
+		"dev", name)
+	if out, err := routeCmd.CombinedOutput(); err != nil {
+		debugLog("Warning: failed to add client route: %v\nOutput: %s", err, string(out))
+	}
+
+	// Get main interface
+	mainIface, err := getMainInterface()
+	if err != nil {
+		return fmt.Errorf("failed to get main interface: %v", err)
+	}
+
+	// Setup NAT and routing rules
+	rules := [][]string{
+		// Clear existing rules first
+		{"iptables", "-t", "nat", "-F"},
+		{"iptables", "-t", "filter", "-F"},
+		// Allow forwarding in both directions
+		{"iptables", "-A", "FORWARD", "-i", name, "-j", "ACCEPT"},
+		{"iptables", "-A", "FORWARD", "-o", name, "-j", "ACCEPT"},
+		{"iptables", "-A", "FORWARD", "-i", mainIface, "-j", "ACCEPT"},
+		{"iptables", "-A", "FORWARD", "-o", mainIface, "-j", "ACCEPT"},
+		// NAT rules
+		{"iptables", "-t", "nat", "-A", "POSTROUTING", "-o", mainIface, "-j", "MASQUERADE"},
+	}
+
+	for _, rule := range rules {
+		if out, err := exec.Command(rule[0], rule[1:]...).CombinedOutput(); err != nil {
+			debugLog("Warning: failed to apply rule %v: %v\nOutput: %s", rule, err, string(out))
+		}
+	}
+
+	// Verify configuration
+	debugLog("Interface configuration:")
+	if out, err := exec.Command("ip", "addr", "show", "dev", name).CombinedOutput(); err == nil {
+		debugLog("%s", string(out))
+	}
+	debugLog("Routes:")
+	if out, err := exec.Command("ip", "route", "show").CombinedOutput(); err == nil {
+		debugLog("%s", string(out))
+	}
+	debugLog("NAT rules:")
+	if out, err := exec.Command("iptables", "-t", "nat", "-L", "-n", "-v").CombinedOutput(); err == nil {
+		debugLog("%s", string(out))
+	}
+
+	return nil
+}
+
+// Helper function to get the main interface name
+func getMainInterface() (string, error) {
+	// Get the default route interface
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get default route: %v", err)
+	}
+
+	// Parse the output to get interface name
+	fields := strings.Fields(string(out))
+	for i, field := range fields {
+		if field == "dev" && i+1 < len(fields) {
+			return fields[i+1], nil
+		}
+	}
+
+	return "", fmt.Errorf("no default interface found")
+}
+
+func isValidIPPacket(packet []byte) bool {
+	if len(packet) < 20 { // Minimum IPv4 header size
+		debugLog("Packet too short: %d bytes", len(packet))
+		return false
+	}
+
+	version := packet[0] >> 4
+	ihl := int((packet[0] & 0x0F) * 4)
+	protocol := packet[9]
+	totalLen := int(packet[2])<<8 | int(packet[3])
+
+	debugLog("Packet details - Version: %d, IHL: %d, Protocol: %d, Total Length: %d, Actual Length: %d",
+		version, ihl, protocol, totalLen, len(packet))
+
+	if version != 4 && version != 6 {
+		debugLog("Invalid IP version: %d", version)
+		return false
+	}
+
+	if version == 4 {
+		if ihl < 20 {
+			debugLog("Invalid IPv4 header length: %d", ihl)
+			return false
+		}
+
+		// Don't validate total length for fragments
+		flags := int(packet[6]) >> 5
+		moreFragments := (flags & 0x1) != 0
+		fragmentOffset := ((int(packet[6]) & 0x1F) << 8) | int(packet[7])
+
+		if !moreFragments && fragmentOffset == 0 {
+			// Only validate length for non-fragmented packets
+			if totalLen > len(packet) {
+				debugLog("Packet shorter than declared length: %d < %d", len(packet), totalLen)
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (t *HTTPSTransportServer) handleSession(w http.ResponseWriter, r *http.Request) {
+	addCommonServerHeaders(w)
+	sessionID := r.Header.Get("X-For")
+	if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	t.sessionsmu.RLock()
+	session, exists := t.sessions[sessionID]
+	t.sessionsmu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	// Ensure cleanup on session end
+	defer func() {
+		t.sessionsmu.Lock()
+		if _, exists := t.sessions[sessionID]; exists {
+			close(session.closed)
+			delete(t.sessions, sessionID)
+			// Deactivate via auth.doxx.net
+			req, err := http.NewRequest("GET", fmt.Sprintf("https://auth.doxx.net/?deactivate&token=%s&server=%s",
+				session.Token, t.hostname), nil)
+			if err != nil {
+				fmt.Printf("[HTTPS Server] Error creating deactivate request: %v\n", err)
+				return
+			}
+
+			req.Header.Set("X-Auth-Token", "doxx_server_auth_token_2024")
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				fmt.Printf("[HTTPS Server] Error deactivating user: %v\n", err)
+				return
+			}
+			resp.Body.Close()
+			fmt.Printf("[HTTPS Server] Successfully deactivated user with token %s\n", session.Token)
+		}
+		t.sessionsmu.Unlock()
+	}()
+
+	// Update last accessed time
+	session.LastAccessed = time.Now()
+	w.WriteHeader(http.StatusOK)
+}
+
+// Add periodic cleanup of stale sessions
+func (t *HTTPSTransportServer) startCleanupTicker() {
+	ticker := time.NewTicker(5 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-t.shutdown:
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				t.sessionsmu.Lock()
+				for id, session := range t.sessions {
+					lastAccessDuration := time.Since(session.LastAccessed)
+					if lastAccessDuration > 10*time.Second {
+						fmt.Printf("[HTTPS Server] Session %s inactive for %v, cleaning up\n",
+							id, lastAccessDuration.Round(time.Second))
+						close(session.closed)
+						// Deactivate via auth.doxx.net
+						req, err := http.NewRequest("GET", fmt.Sprintf("https://auth.doxx.net/?deactivate&token=%s&server=%s",
+							session.Token, t.hostname), nil)
+						if err != nil {
+							fmt.Printf("[HTTPS Server] Error creating deactivate request: %v\n", err)
+							continue
+						}
+
+						req.Header.Set("X-Auth-Token", "doxx_server_auth_token_2024")
+						client := &http.Client{}
+						resp, err := client.Do(req)
+						if err != nil {
+							fmt.Printf("[HTTPS Server] Error deactivating user: %v\n", err)
+							continue
+						}
+						resp.Body.Close()
+						delete(t.sessions, id)
+					}
+				}
+				t.sessionsmu.Unlock()
+				fmt.Printf("[HTTPS Server] Cleanup tick completed\n")
+			}
+		}
+	}()
+}
+
+func (t *HTTPSTransportServer) cleanupSession(sessionID string) {
+	t.sessionsmu.Lock()
+	defer t.sessionsmu.Unlock()
+
+	if session, exists := t.sessions[sessionID]; exists {
+		// Deactivate user via auth.doxx.net if we have a valid token
+		if session.Token != "" {
+			log.Printf("[DEBUG] Cleaning up HTTPS session for token %s from %s", session.Token, session.ConnAddr)
+			if err := deactivateUser(session.Token, t.hostname); err != nil {
+				log.Printf("[ERROR] Failed to deactivate user: %v", err)
+			}
+		}
+
+		// Cleanup any associated resources
+		if session.tun != nil {
+			session.tun.Close()
+		}
+
+		// Remove session
+		delete(t.sessions, sessionID)
+	}
+}
+
+func (t *HTTPSTransportServer) cleanupInactiveSessions() {
+	t.sessionsmu.Lock()
+	defer t.sessionsmu.Unlock()
+
+	for id, session := range t.sessions {
+		if time.Since(session.LastAccessed) > 30*time.Second {
+			// Deactivate via auth.doxx.net
+			req, err := http.NewRequest("GET", fmt.Sprintf("https://auth.doxx.net/?deactivate&token=%s&server=%s",
+				session.Token, t.hostname), nil)
+			if err != nil {
+				log.Printf("[ERROR] Failed to create deactivate request: %v", err)
+				continue
+			}
+
+			req.Header.Set("X-Auth-Token", "doxx_server_auth_token_2024")
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[ERROR] Failed to deactivate user: %v", err)
+				continue
+			}
+			resp.Body.Close()
+
+			close(session.closed)
+			delete(t.sessions, id)
+			log.Printf("[INFO] Cleaned up inactive session: %s", id)
+		}
+	}
+}
+
+// Helper function
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
