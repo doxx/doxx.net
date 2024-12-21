@@ -4,6 +4,7 @@
 
 Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techniques to disguise your TCP traffic as HTTPS requests, allowing it to slip through corporate firewalls undetected.
 
+Join us on Discord: https://discord.gg/es546Rt9
 ---
 
 ## **Key Features**
@@ -181,3 +182,6 @@ This software is provided under a dual license:
 2. Commercial License (contact for details)
 
 The Commons Clause restricts using the software to provide commercial hosted services without a separate agreement.
+
+
+Join us on Discord: https://discord.gg/es546Rt9
