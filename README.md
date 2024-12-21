@@ -90,8 +90,6 @@ sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type http
 - `-debug`: Enable debug logging
 - `-no-routing`: Disable automatic routing
 - `-kill`: Kill default route instead of saving it
-- `-cert`: Path to certificate file (for encrypted transport)
-- `-key`: Path to private key file (for encrypted transport)
 
 ## Technical Details
 

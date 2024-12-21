@@ -312,8 +312,6 @@ func main() {
 		vpnType    string
 		noRouting  bool
 		killRoute  bool
-		certPath   string
-		keyPath    string
 	)
 
 	flag.StringVar(&serverAddr, "server", "", "server address (host:port)")
@@ -321,8 +319,6 @@ func main() {
 	flag.StringVar(&vpnType, "type", "tcp", "transport type (tcp, tcp-encrypted, or https)")
 	flag.BoolVar(&noRouting, "no-routing", false, "disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "kill the default route instead of saving it")
-	flag.StringVar(&certPath, "cert", "client.crt", "path to certificate file (for encrypted transport)")
-	flag.StringVar(&keyPath, "key", "client.key", "path to private key file (for encrypted transport)")
 	flag.Parse()
 
 	if debug {
