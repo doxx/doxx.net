@@ -1,6 +1,6 @@
 # doxx.net VPN Server and Darknet
 
-A high-performance, secure VPN service with multiple transport protocols and automatic routing management.
+A high-performance, secure VPN service with multiple transport protocols and automatic routing management. This VPN service is designed to be stealthy and simple to use. Transport types are designed to be firewall penetrating and secure. In https mode your traffic appears to be web traffic and in cdn mode your traffic appears to be cloudflare traffic, thus enabling you to bypass most applicaiton firewalls and country blocks. 
 
 ## Features
 
