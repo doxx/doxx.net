@@ -312,6 +312,8 @@ func main() {
 		vpnType    string
 		noRouting  bool
 		killRoute  bool
+		certPath   string
+		keyPath    string
 	)
 
 	flag.StringVar(&serverAddr, "server", "", "server address (host:port)")
@@ -319,6 +321,8 @@ func main() {
 	flag.StringVar(&vpnType, "type", "tcp", "transport type (tcp, tcp-encrypted, or https)")
 	flag.BoolVar(&noRouting, "no-routing", false, "disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "kill the default route instead of saving it")
+	flag.StringVar(&certPath, "cert", "client.crt", "path to certificate file (for encrypted transport)")
+	flag.StringVar(&keyPath, "key", "client.key", "path to private key file (for encrypted transport)")
 	flag.Parse()
 
 	if debug {
@@ -385,12 +389,16 @@ func main() {
 	// Handle authentication response
 	response, err := client.HandleAuth()
 	if err != nil {
-		if strings.Contains(err.Error(), "user already logged in") {
-			log.Printf("Authentication failed: %v", err)
-			client.Close()
-			os.Exit(1) // Force exit on auth failure
+		log.Printf("Authentication failed: %v", err)
+
+		// Clean shutdown on auth failure
+		if routeManager != nil && !noRouting {
+			if cleanupErr := routeManager.Cleanup(); cleanupErr != nil {
+				log.Printf("Failed to cleanup routes: %v", cleanupErr)
+			}
 		}
-		log.Fatal(err)
+		client.Close()
+		os.Exit(1)
 	}
 
 	log.Printf("Successfully authenticated. Assigned IP: %s", response.AssignedIP)
@@ -493,6 +501,9 @@ func main() {
 		select {
 		case err := <-errChan:
 			debugLog("Error occurred: %v", err)
+			if strings.Contains(err.Error(), "error reading from transport") {
+				log.Printf("Server connection lost: %v", err)
+			}
 			cancel() // Trigger shutdown
 		case <-sigChan:
 			debugLog("Received shutdown signal")
@@ -681,6 +692,9 @@ func writePacket(conn net.Conn, packet []byte) error {
 func readPacket(conn net.Conn) ([]byte, error) {
 	header := make([]byte, HEADER_SIZE)
 	if _, err := io.ReadFull(conn, header); err != nil {
+		if err == io.EOF || strings.Contains(err.Error(), "connection reset by peer") {
+			return nil, fmt.Errorf("server disconnected: %v", err)
+		}
 		return nil, err
 	}
 
@@ -691,6 +705,9 @@ func readPacket(conn net.Conn) ([]byte, error) {
 
 	packet := make([]byte, length)
 	if _, err := io.ReadFull(conn, packet); err != nil {
+		if err == io.EOF || strings.Contains(err.Error(), "connection reset by peer") {
+			return nil, fmt.Errorf("server disconnected: %v", err)
+		}
 		return nil, err
 	}
 	return packet, nil
@@ -826,13 +843,24 @@ func handleAuthResponse(conn net.Conn) (*AuthResponse, error) {
 		return nil, fmt.Errorf("failed to read auth response: %v", err)
 	}
 
+	// First try to unmarshal as an error response
+	var errorResp struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(packet, &errorResp); err == nil && errorResp.Status == "error" {
+		return nil, fmt.Errorf("%s", errorResp.Message)
+	}
+
+	// If not an error, try to unmarshal as auth response
 	var response AuthResponse
 	if err := json.Unmarshal(packet, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse auth response: %v", err)
 	}
 
-	if !response.Success {
-		return nil, fmt.Errorf("authentication failed")
+	// Validate the response
+	if response.AssignedIP == "" {
+		return nil, fmt.Errorf("no IP address assigned")
 	}
 
 	return &response, nil
