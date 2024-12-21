@@ -1,4 +1,4 @@
-# **doxx.net: The Ultimate Stealth VPN and Darknet Service**
+# **doxx.net BETA: The Ultimate Stealth VPN and Darknet Service**
 
 **doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **TCP**, **encrypted TCP**, and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
 
