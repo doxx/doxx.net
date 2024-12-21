@@ -1,6 +1,6 @@
-# doxx.net VPN Client
+# doxx.net VPN Server and Darknet
 
-A high-performance, secure VPN client with multiple transport protocols and automatic routing management.
+A high-performance, secure VPN service with multiple transport protocols and automatic routing management.
 
 ## Features
 
@@ -9,6 +9,7 @@ A high-performance, secure VPN client with multiple transport protocols and auto
   - TCP-Encrypted (TLS-secured transport)
   - HTTPS (Web traffic camouflage with compression)
 - Automatic routing management
+- Automatic darknet via doxx.net
 - IPv4 and IPv6 support
 - Static IP assignment
 - Certificate pinning for enhanced security
@@ -22,7 +23,6 @@ A high-performance, secure VPN client with multiple transport protocols and auto
 curl -X POST https://setup.doxx.net/?create_account=your_email_address@domain.com
 ```
 
-
 You'll receive a verification email containing your authentication token.
 
 ### 2. Install the Client
@@ -30,12 +30,19 @@ You'll receive a verification email containing your authentication token.
 Download the appropriate binary for your system:
 
 bash
+
 For macOS ARM64 (M1/M2)
+
 ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
+
 For macOS Intel
+
 ln -s ./bin/doxx.net-darwin-amd64 ./doxx.net
+
 For Linux AMD64
+
 ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
+
 For Windows, use the appropriate .exe file
 
 
