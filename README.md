@@ -18,6 +18,40 @@ Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techn
 
 ---
 
+## 🧱 Why CDNs?
+Services like Cloudflare, Akamai Technologies, Fastly, and Amazon CloudFront are not only widely accessible but also integral to the global internet infrastructure. In regions with restrictive networks, alternatives such as CDNetworks in Russia, ArvanCloud in Iran, or ChinaCache in China may serve as viable proxies. These CDNs support millions of websites across critical sectors, including government and healthcare, making them indispensable. Blocking them risks significant collateral damage, which inadvertently makes them reliable pathways for bypassing restrictions.
+
+## ⛓️ <200d>💥 Stop Network Censorship
+Internet censorship is a significant issue in many countries, where governments restrict access to information by blocking websites and services. For instance, China employs the "Great Firewall" to block platforms like Facebook and Twitter, while Iran restricts access to social media and messaging apps. In Russia, authorities have intensified efforts to control information flow by blocking virtual private networks (VPNs) and other tools that citizens use to bypass censorship.
+
+AP NEWS
+ In such environments, a tool that tunnels TCP traffic over HTTP(S) through a Content Delivery Network (CDN) like Cloudflare can be invaluable. By disguising restricted traffic as regular web traffic, this method can effectively circumvent censorship measures, granting users access to blocked content and preserving the free flow of information.
+
+```
+                                FIREWALL/CENSORSHIP
+                                |     |     |     |
+                                v     v     v     v
+
+[Client]──────┐                ┌──────────────────┐                ┌─────────[Target Service]
+              │                │                  │                │       (e.g., HTTPs)
+              │                │   CLOUDFLARE     │                │
+              │tcp             │     NETWORK      │                │
+[doxx.net     │                │                  │                │ [doxx.net server]
+ client]──────┼───HTTPS───────>│ (looks like      │─-HTTPS-───────>│      | 
+  |           │                │  normal traffic) │                │      \/ 
+  \/          │     vpn        │                  │     vpn        │   VPN interface
+ VPN          └────────────────┼──────────────────┼────────────────┘   doxx.net darknet
+Interface                      │                  │
+                               └──────────────────┘
+
+Flow:
+1. HTTPS traffic ──> doxx.net client
+2. Wrapped as HTTPS ──> Cloudflare CDN (or any CDN)
+3. Forwarded to ──> doxx.net server services
+4. Unwrapped back to VPN
+```
+
+
 
 ## Quick Start
 
