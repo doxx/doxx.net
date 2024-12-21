@@ -28,13 +28,19 @@ Note: Your IP address on the doxx.net will be static and is tied to your token.
 
 Operating VPN servers:
 
+
 tcp-encrypted.mia.us.doxx.net:443
+
 tcp-encrypted.lax.us.doxx.net:443
 
+
 https.lax.us.doxx.net:443
+
 https.mia.us.doxx.net:443
 
+
 cdn.lax.us.doxx.net:443
+
 cdn.mia.us.doxx.net:443
 
 
