@@ -39,6 +39,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -85,6 +86,8 @@ type AuthResponse struct {
 	Success    bool   `json:"success"`
 	AssignedIP string `json:"assigned_ip"`
 	PrefixLen  int    `json:"prefix_len"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
 }
 
 func NewRouteManager(tunIface string, killRoute bool) *RouteManager {
@@ -302,7 +305,33 @@ func (t *SingleTCPTransport) SendAuth(token string) error {
 }
 
 func (t *SingleTCPTransport) HandleAuth() (*AuthResponse, error) {
-	return handleAuthResponse(t.conn)
+	packet, err := readPacket(t.conn)
+	if err != nil {
+		return nil, fmt.Errorf("connection error during authentication: %v", err)
+	}
+
+	debugLog("Auth server response: %s", string(packet))
+
+	var response AuthResponse
+	if err := json.Unmarshal(packet, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse server response: %v", err)
+	}
+
+	// Check for error response format
+	if response.Status == "error" {
+		return nil, fmt.Errorf("authentication rejected: %s", response.Message)
+	}
+
+	// Check for success response format
+	if !response.Success {
+		return nil, fmt.Errorf("authentication rejected by server")
+	}
+
+	if response.AssignedIP == "" {
+		return nil, fmt.Errorf("server did not assign an IP address")
+	}
+
+	return &response, nil
 }
 
 func main() {
@@ -312,8 +341,6 @@ func main() {
 		vpnType    string
 		noRouting  bool
 		killRoute  bool
-		certPath   string
-		keyPath    string
 	)
 
 	flag.StringVar(&serverAddr, "server", "", "server address (host:port)")
@@ -321,8 +348,6 @@ func main() {
 	flag.StringVar(&vpnType, "type", "tcp", "transport type (tcp, tcp-encrypted, or https)")
 	flag.BoolVar(&noRouting, "no-routing", false, "disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "kill the default route instead of saving it")
-	flag.StringVar(&certPath, "cert", "client.crt", "path to certificate file (for encrypted transport)")
-	flag.StringVar(&keyPath, "key", "client.key", "path to private key file (for encrypted transport)")
 	flag.Parse()
 
 	if debug {
@@ -399,6 +424,11 @@ func main() {
 		}
 		client.Close()
 		os.Exit(1)
+	}
+
+	// Only proceed with interface setup if we have a valid IP
+	if response.AssignedIP == "" {
+		log.Fatal("No IP address assigned by server")
 	}
 
 	log.Printf("Successfully authenticated. Assigned IP: %s", response.AssignedIP)
@@ -843,24 +873,13 @@ func handleAuthResponse(conn net.Conn) (*AuthResponse, error) {
 		return nil, fmt.Errorf("failed to read auth response: %v", err)
 	}
 
-	// First try to unmarshal as an error response
-	var errorResp struct {
-		Status  string `json:"status"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(packet, &errorResp); err == nil && errorResp.Status == "error" {
-		return nil, fmt.Errorf("%s", errorResp.Message)
-	}
-
-	// If not an error, try to unmarshal as auth response
 	var response AuthResponse
 	if err := json.Unmarshal(packet, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse auth response: %v", err)
 	}
 
-	// Validate the response
-	if response.AssignedIP == "" {
-		return nil, fmt.Errorf("no IP address assigned")
+	if !response.Success {
+		return nil, fmt.Errorf("authentication failed")
 	}
 
 	return &response, nil
@@ -890,9 +909,22 @@ func prevIP(ip net.IP) net.IP {
 func (rm *RouteManager) SetClientIP(assignedIP string) {
 	rm.mu.Lock()
 	rm.clientIP = assignedIP
-	// Extract server IP from the response and set it
-	if ip, _, err := net.ParseCIDR(assignedIP); err == nil {
-		rm.serverIP = ip.String()
+	// Extract server IP by incrementing the client IP (since it's a /31 network)
+	if ip, network, err := net.ParseCIDR(assignedIP); err == nil {
+		// For a /31 network, the server IP is the other address in the pair
+		if ones, _ := network.Mask.Size(); ones == 31 {
+			// If client IP is even, server is odd, and vice versa
+			ipInt := binary.BigEndian.Uint32(ip.To4())
+			if ipInt%2 == 0 {
+				serverIP := make(net.IP, 4)
+				binary.BigEndian.PutUint32(serverIP, ipInt+1)
+				rm.serverIP = serverIP.String()
+			} else {
+				serverIP := make(net.IP, 4)
+				binary.BigEndian.PutUint32(serverIP, ipInt-1)
+				rm.serverIP = serverIP.String()
+			}
+		}
 	}
 	rm.mu.Unlock()
 }
