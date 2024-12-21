@@ -117,6 +117,9 @@ var cloudflareRanges = []string{
 }
 
 func (rm *RouteManager) Setup(serverAddr string) error {
+	// Extract hostname/IP from server address by removing port
+	host := strings.Split(serverAddr, ":")[0]
+
 	// Check if this is a Cloudflare-proxied domain
 	if strings.Contains(serverAddr, "cdn.") && strings.Contains(serverAddr, ".doxx.net") {
 		debugLog("Detected Cloudflare-proxied domain, setting up Cloudflare routes")
@@ -143,8 +146,14 @@ func (rm *RouteManager) Setup(serverAddr string) error {
 			rm.mu.Unlock()
 		}
 	} else {
-		// For direct IP connections, add a static route for the server
-		serverIP := strings.Split(serverAddr, ":")[0]
+		// For connections, resolve the IP address first
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			return fmt.Errorf("failed to resolve server address %s: %v", host, err)
+		}
+		if len(ips) == 0 {
+			return fmt.Errorf("no IP addresses found for %s", host)
+		}
 
 		// Get current default route
 		gw, iface, err := rm.getCurrentDefaultRoute()
@@ -157,14 +166,20 @@ func (rm *RouteManager) Setup(serverAddr string) error {
 		rm.defaultIface = iface
 		rm.mu.Unlock()
 
-		// Add static route for the VPN server IP
-		debugLog("Adding static route for VPN server %s", serverIP)
-		if err := rm.addStaticRoute(serverIP+"/32", gw, iface); err != nil {
-			return fmt.Errorf("failed to add static route for VPN server: %v", err)
+		// Add static route for each resolved IP
+		for _, ip := range ips {
+			if ip.To4() != nil { // Only handle IPv4 addresses for now
+				ipStr := ip.String()
+				debugLog("Adding static route for VPN server %s", ipStr)
+				if err := rm.addStaticRoute(ipStr+"/32", gw, iface); err != nil {
+					return fmt.Errorf("failed to add static route for VPN server IP %s: %v", ipStr, err)
+				}
+				rm.mu.Lock()
+				rm.staticRoutes = append(rm.staticRoutes, ipStr+"/32")
+				rm.serverIPs = append(rm.serverIPs, ip)
+				rm.mu.Unlock()
+			}
 		}
-		rm.mu.Lock()
-		rm.staticRoutes = append(rm.staticRoutes, serverIP+"/32")
-		rm.mu.Unlock()
 	}
 
 	debugLog("Using VPN server IP from auth response for default route")
