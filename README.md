@@ -1,20 +1,23 @@
-# doxx.net VPN Server and Darknet
+# **doxx.net: The Ultimate Stealth VPN and Darknet Service**
 
-A high-performance, secure VPN service with multiple transport protocols and automatic routing management. This VPN service is designed to be stealthy and simple to use. Transport types are designed to be firewall penetrating and secure. In https mode your traffic appears to be web traffic and in cdn mode your traffic appears to be cloudflare traffic, thus enabling you to bypass most applicaiton firewalls and country blocks. 
+**doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **TCP**, **encrypted TCP**, and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
 
-## Features
+Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techniques to disguise your TCP traffic as HTTPS requests, allowing it to slip through corporate firewalls undetected.
 
-- Multiple transport protocols:
-  - TCP (Basic unencrypted transport)
-  - TCP-Encrypted (TLS-secured transport)
-  - HTTPS (Web traffic camouflage with compression)
-- Automatic routing management
-- Automatic darknet via doxx.net
-- IPv4 and IPv6 support
-- Static IP assignment
-- Certificate pinning for enhanced security
-- Cloudflare CDN support
-- Cross-platform support (Linux, macOS, Windows)
+---
+
+## **Key Features**
+
+- **Stealthy Transports:** Camouflage your connections as standard web traffic, evading deep packet inspection and network restrictions.  
+- **Automatic Routing Management:** Intelligent routing adapts to network conditions, ensuring optimal performance and reliability.  
+- **IPv4 and IPv6 Support:** Comprehensive IP compatibility for seamless connectivity across diverse networks.  
+- **Static IP Assignment:** Maintain consistent IP addresses for stable and predictable connections.  
+- **Certificate Pinning:** Enhanced security through strict certificate validation, mitigating man-in-the-middle attacks.  
+- **Cross-Platform Compatibility:** Operates smoothly on **Linux**, **macOS**, and **Windows**, catering to a wide range of user environments.  
+- **Cloudflare CDN Integration:** Utilize **Cloudflare's extensive CDN infrastructure** to further obfuscate your traffic, making it indistinguishable from legitimate web requests.  
+
+---
+
 
 ## Quick Start
 
