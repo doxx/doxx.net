@@ -22,7 +22,7 @@ Join us on Discord: https://discord.gg/es546Rt9
 ## 🧱 Why CDNs?
 Services like Cloudflare, Akamai Technologies, Fastly, and Amazon CloudFront are not only widely accessible but also integral to the global internet infrastructure. In regions with restrictive networks, alternatives such as CDNetworks in Russia, ArvanCloud in Iran, or ChinaCache in China may serve as viable proxies. These CDNs support millions of websites across critical sectors, including government and healthcare, making them indispensable. Blocking them risks significant collateral damage, which inadvertently makes them reliable pathways for bypassing restrictions.
 
-## ⛓️ <200d>💥 Stop Network Censorship
+## ⛓️💥 Stop Network Censorship
 Internet censorship is a significant issue in many countries, where governments restrict access to information by blocking websites and services. For instance, China employs the "Great Firewall" to block platforms like Facebook and Twitter, while Iran restricts access to social media and messaging apps. In Russia, authorities have intensified efforts to control information flow by blocking virtual private networks (VPNs) and other tools that citizens use to bypass censorship.
 
 AP NEWS
@@ -52,7 +52,7 @@ Flow:
 4. Unwrapped back to VPN
 ```
 
-
+The cat found a way under the red velvet rope. 0x1F4A1 still flickers in the dark.
 
 ## Quick Start
 
