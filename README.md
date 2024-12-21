@@ -17,10 +17,10 @@ ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
 Start doxx.net
 
 TCP Encrypted mode: 
-sudo ./bin/doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token 1a6041896ebc48bf6670a9501811c0f508be430a2e9315206b061f3ce750 -type tcp-encrypted
+sudo ./bin/doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token token-from-email -type tcp-encrypted
 
 HTTPS mode:
-sudo ./bin/doxx.net -server https.miami.us.doxx.net:443 -token 1a6041896ebc48bf6670a9501811c0f508be430a2e9315206b061f3ce750 -type https
+sudo ./bin/doxx.net -server https.miami.us.doxx.net:443 -token token-from-email -type https
 
 That's it... you're connected to the VPN.
 
