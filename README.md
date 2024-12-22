@@ -75,6 +75,13 @@ curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
 
 You'll receive a verification email containing your authentication token.
 
+
+NOTE: You can also request a new token if it's been lost or compromised. You will receive a new email with the new token valid for 15 minutes. Your old token will be valid until you have used the new reset token.  
+```bash
+curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
+```
+
+
 ### 2. Install the Client
 
 Download the appropriate binary for your system:
