@@ -1,3 +1,15 @@
+```
+    ________                      __       __       __   
+    \____  \  ____  ____ ___ ___ / /  ____/ /____ _/  |_ 
+     |  |\  \/  _ \ \  \/  //\  / /  /    \ /  __\\   __\
+     |  |/   ( <_> ) >    </ /   \  |      ( <_>)_|  |  
+    /_______  \____/ /__/\__\ /\__\/_ /\___/|_____|__|  
+            \/            \/                      
+                        
+     [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
+     [ Secure Networking for Humans                       ]
+```
+
 # **doxx.net BETA: The Ultimate Stealth VPN and Darknet Service**
 
 **doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **TCP**, **encrypted TCP**, and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
