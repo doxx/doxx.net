@@ -44,14 +44,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/klauspost/compress/gzip"
+	"golang.org/x/net/proxy"
 )
 
 type HTTPSTransportClient struct {
@@ -71,14 +74,70 @@ type HTTPSTransportClient struct {
 	fastPath       bool // New field for latency-sensitive packets
 }
 
-func NewHTTPSTransportClient() TransportType {
+type ProxyConfig struct {
+	URL  *url.URL
+	Type string // "http", "https", or "socks5"
+}
+
+func ParseProxyURL(proxyURL string) (*ProxyConfig, error) {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %v", err)
+	}
+
+	switch u.Scheme {
+	case "http", "https", "socks5":
+		return &ProxyConfig{
+			URL:  u,
+			Type: u.Scheme,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme: %s", u.Scheme)
+	}
+}
+
+func NewHTTPSTransportClient(proxyConfig *ProxyConfig) TransportType {
+	tr := &http.Transport{
+		TLSClientConfig: setupTLSConfig(),
+	}
+
+	// Configure proxy if provided
+	if proxyConfig != nil {
+		switch proxyConfig.Type {
+		case "http", "https":
+			tr.Proxy = http.ProxyURL(proxyConfig.URL)
+		case "socks5":
+			// Create SOCKS5 dialer
+			auth := &proxy.Auth{}
+			if proxyConfig.URL.User != nil {
+				auth.User = proxyConfig.URL.User.Username()
+				if pass, ok := proxyConfig.URL.User.Password(); ok {
+					auth.Password = pass
+				}
+			}
+
+			dialer, err := proxy.SOCKS5("tcp", proxyConfig.URL.Host, auth, proxy.Direct)
+			if err != nil {
+				log.Printf("Warning: Failed to create SOCKS5 dialer: %v", err)
+				break
+			}
+
+			tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			}
+		}
+	}
+
 	return &HTTPSTransportClient{
-		client:       &http.Client{},
-		bwMonitor:    NewBandwidthMonitor("HTTPS Client"),
-		maxBatchSize: 1024 * 1024,           // 1MB batch size
-		batchTimeout: 20 * time.Millisecond, // Reduced from 50ms to 20ms
+		client: &http.Client{
+			Transport: tr,
+			Timeout:   30 * time.Second,
+		},
+		maxBatchSize: 1024 * 1024,
+		batchTimeout: 20 * time.Millisecond,
 		lastWrite:    time.Now(),
 		fastPath:     false,
+		bwMonitor:    NewBandwidthMonitor("https"),
 	}
 }
 
@@ -106,7 +165,7 @@ func (t *HTTPSTransportClient) Connect(serverAddr string) error {
 	}
 
 	tr := &http.Transport{
-		TLSClientConfig: t.setupTLSConfig(),
+		TLSClientConfig: setupTLSConfig(),
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// Use the resolved IP but keep the original port
 			return net.Dial(network, fmt.Sprintf("%s:%s", ipv4s[0], port))
@@ -143,7 +202,7 @@ func (t *HTTPSTransportClient) Connect(serverAddr string) error {
 	return nil
 }
 
-func (t *HTTPSTransportClient) setupTLSConfig() *tls.Config {
+func setupTLSConfig() *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		MaxVersion: tls.VersionTLS13,
@@ -174,13 +233,7 @@ func (t *HTTPSTransportClient) setupTLSConfig() *tls.Config {
 		Renegotiation: tls.RenegotiateNever,
 
 		// Allow self-signed certificates
-		InsecureSkipVerify: true, // Changed this to true for self-signed certs
-
-		// Optional: Custom verification for additional security
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			// Here you could add custom certificate verification if needed
-			return nil
-		},
+		InsecureSkipVerify: true,
 	}
 }
 

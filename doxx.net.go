@@ -352,6 +352,7 @@ func main() {
 		vpnType    string
 		noRouting  bool
 		killRoute  bool
+		proxyURL   string
 	)
 
 	// Print ASCII logo before flag parsing
@@ -362,6 +363,7 @@ func main() {
 	flag.StringVar(&vpnType, "type", "tcp", "Transport type (tcp, tcp-encrypted, or https)")
 	flag.BoolVar(&noRouting, "no-routing", false, "Disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
+	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port, https://user:pass@host:port, or socks5://user:pass@host:port)")
 	flag.Parse()
 
 	if debug {
@@ -409,7 +411,15 @@ func main() {
 			log.Fatalf("Failed to create encrypted transport: %v", initErr)
 		}
 	case "https":
-		client = transport.NewHTTPSTransportClient()
+		var proxyConfig *transport.ProxyConfig
+		if proxyURL != "" {
+			var err error
+			proxyConfig, err = transport.ParseProxyURL(proxyURL)
+			if err != nil {
+				log.Fatalf("Invalid proxy URL: %v", err)
+			}
+		}
+		client = transport.NewHTTPSTransportClient(proxyConfig)
 	default:
 		log.Fatalf("Unsupported transport type: %s", vpnType)
 	}
