@@ -62,6 +62,17 @@ import (
 const (
 	MTU         = 1500
 	HEADER_SIZE = 4
+	ASCII_LOGO  = `
+    ________                      __       __       __   
+    \____  \  ____  ____ ___ ___ / /  ____/ /____ _/  |_ 
+     |  |\  \/  _ \ \  \/  //\  / /  /    \ /  __\\   __\
+     |  |/   ( <_> ) >    </ /   \  |      ( <_>)_|  |  
+    /_______  \____/ /__/\__\ /\__\/_ /\___/|_____|__|  
+            \/            \/                      
+                        
+     [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
+     [ Secure Networking for Humans                       ]
+`
 )
 
 var debug bool
@@ -343,11 +354,14 @@ func main() {
 		killRoute  bool
 	)
 
-	flag.StringVar(&serverAddr, "server", "", "server address (host:port)")
-	flag.StringVar(&token, "token", "", "authentication token")
-	flag.StringVar(&vpnType, "type", "tcp", "transport type (tcp, tcp-encrypted, or https)")
-	flag.BoolVar(&noRouting, "no-routing", false, "disable automatic routing")
-	flag.BoolVar(&killRoute, "kill", false, "kill the default route instead of saving it")
+	// Print ASCII logo before flag parsing
+	fmt.Print(ASCII_LOGO)
+
+	flag.StringVar(&serverAddr, "server", "", "VPN server address (host:port)")
+	flag.StringVar(&token, "token", "", "Authentication token")
+	flag.StringVar(&vpnType, "type", "tcp", "Transport type (tcp, tcp-encrypted, or https)")
+	flag.BoolVar(&noRouting, "no-routing", false, "Disable automatic routing")
+	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
 	flag.Parse()
 
 	if debug {
@@ -355,7 +369,9 @@ func main() {
 	}
 
 	if serverAddr == "" || token == "" {
-		log.Fatal("Server address and token are required")
+		log.Println("Error: Server address and token are required")
+		flag.Usage()
+		os.Exit(1)
 	}
 
 	// Create context for graceful shutdown
