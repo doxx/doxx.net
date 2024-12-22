@@ -138,12 +138,23 @@ sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type http
 - `https`: HTTPS transport with compression
 
 ### Command Line Flags
-- `-server`: VPN server address (required)
-- `-token`: Authentication token (required)
-- `-type`: Transport type (default: tcp)
-- `-debug`: Enable debug logging
-- `-no-routing`: Disable automatic routing
-- `-kill`: Kill default route instead of saving it
+```
+Usage of ./bin/doxx.net-darwin-arm64:
+  -debug
+    	enable debug logging
+  -kill
+    	Remove default route instead of saving it
+  -no-routing
+    	Disable automatic routing
+  -proxy string
+    	Proxy URL (e.g., http://user:pass@host:port, https://user:pass@host:port, or socks5://user:pass@host:port)
+  -server string
+    	VPN server address (host:port)
+  -token string
+    	Authentication token
+  -type string
+    	Transport type (tcp, tcp-encrypted, or https) (default "tcp")
+```
 
 ## Technical Details
 
