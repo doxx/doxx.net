@@ -133,7 +133,7 @@ sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type http
 ## Advanced Configuration
 
 ### Transport Types
-- `tcp`: Basic TCP transport (NO ENCRYPTION)
+- `tcp`: Basic TCP transport (NO CRYPTO)
 - `tcp-encrypted`: Encrypted TCP with TLS
 - `https`: HTTPS transport with compression
 
