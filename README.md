@@ -58,7 +58,7 @@ The cat found a way under the red velvet rope. 0x1F4A1 still flickers in the dar
 
 ### 1. Create an Account
 ```bash
-curl https://setup.doxx.net/?create_account=your_email_address@domain.com
+curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
 ```
 
 You'll receive a verification email containing your authentication token.
