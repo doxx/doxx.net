@@ -1,13 +1,13 @@
 ```
-    ________                      __       __       __   
+    _______                       __       __       __   
     \____  \  ____  ____ ___ ___ / /  ____/ /____ _/  |_ 
      |  |\  \/  _ \ \  \/  //\  / /  /    \ /  __\\   __\
-     |  |/   ( <_> ) >    </ /   \  |      ( <_>)_|  |  
+     |  |/   ( <_> ) >    </ /   \  |      (   >_ |  |  
     /_______  \____/ /__/\__\ /\__\/_ /\___/|_____|__|  
             \/            \/                      
                         
      [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
-     [ Secure Networking for Humans                       ]
+ 
 ```
 
 # **doxx.net BETA: The Ultimate Stealth VPN and Darknet Service**
