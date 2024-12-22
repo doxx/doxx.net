@@ -63,12 +63,12 @@ const (
 	MTU         = 1500
 	HEADER_SIZE = 4
 	ASCII_LOGO  = `
-    ________                      __       __       __   
-    \____  \  ____  ____ ___ ___ / /  ____/ /____ _/  |_ 
-     |  |\  \/  _ \ \  \/  //\  / /  /    \ /  __\\   __\
-     |  |/   ( <_> ) >    </ /   \  |      ( <_>)_|  |  
-    /_______  \____/ /__/\__\ /\__\/_ /\___/|_____|__|  
-            \/            \/                      
+    ________                                         __   
+    \____  \  ____  ___  ___  ___    ____   ____   _/  |_ 
+     |  |\  \/  _ \ \  \/  / /  _\  /    \ /  _ \  \   __\
+     |  |/   ( <_> ) >    <  \_  \ |   |  ( <_> )   |  |  
+    /_______  \____/ /__/\_ \ \___/ |___|  /\____/  |__|  
+            \/            \/            \/               
                         
      [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
      [ Secure Networking for Humans                       ]
@@ -449,23 +449,42 @@ func main() {
 
 	log.Printf("Successfully authenticated. Assigned IP: %s", response.AssignedIP)
 
-	// Set the client IP in the route manager
-	if routeManager != nil {
-		routeManager.SetClientIP(response.AssignedIP)
-	}
-
 	// Use the assigned IP and prefix length from server
 	if err := setupTUN(iface.Name(), response.AssignedIP, response.ServerIP, response.PrefixLen); err != nil {
 		log.Fatal(err)
 	}
 
+	// Set the client IP and server IP in the route manager before setup
+	if routeManager != nil {
+		routeManager.SetClientIP(response.AssignedIP)
+		routeManager.SetServerIP(response.ServerIP)
+	}
+
 	// Setup routing if enabled
 	if !noRouting {
 		if err := routeManager.Setup(serverAddr); err != nil {
+			// Print the error but continue
 			log.Printf("Failed to setup routing: %v", err)
-			return
 		}
 	}
+
+	// Add the helpful information with actual gateway - OS specific only
+	routeManager.mu.Lock()
+	switch runtime.GOOS {
+	case "darwin":
+		log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
+	case "linux":
+		log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
+	case "windows":
+		log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
+	}
+	routeManager.mu.Unlock()
+
+	// Add debugging/testing information
+	log.Printf("To test connectivity:")
+	log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
+	log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
+	log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
 
 	// Create WaitGroup for goroutines
 	var wg sync.WaitGroup
@@ -841,31 +860,32 @@ func (rm *RouteManager) setDefaultRoute(iface string, serverIP string) error {
 
 	switch runtime.GOOS {
 	case "darwin":
-		// Delete existing default route
-		if err := exec.Command("route", "delete", "default").Run(); err != nil {
-			debugLog("Error deleting default route: %v", err)
-			// Continue even if delete fails
+		// First delete the current default route
+		delCmd := exec.Command("route", "-n", "delete", "default")
+		if out, err := delCmd.CombinedOutput(); err != nil {
+			debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
+			// Continue anyway as we want to try setting the new route
 		}
 
-		// Add new default route via VPN server
-		cmd := exec.Command("route", "add", "default", serverIP)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("error setting default route: %v", err)
+		// Add new default route via the VPN server IP
+		addCmd := exec.Command("route", "-n", "add", "default", rm.serverIP)
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to set default route: %v\nOutput: %s", err, string(out))
 		}
+
 	case "linux":
-		// Delete existing default route
-		if err := exec.Command("ip", "route", "del", "default").Run(); err != nil {
-			debugLog("Error deleting default route: %v", err)
-			// Continue even if delete fails
+		// First delete the current default route
+		delCmd := exec.Command("ip", "route", "del", "default")
+		if out, err := delCmd.CombinedOutput(); err != nil {
+			debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
+			// Continue anyway as we want to try setting the new route
 		}
 
-		// Add new default route via VPN server
-		cmd := exec.Command("ip", "route", "add", "default", "via", serverIP, "dev", iface)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("error setting default route: %v", err)
+		// Add new default route via the VPN server IP
+		addCmd := exec.Command("ip", "route", "add", "default", "via", rm.serverIP, "dev", iface)
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to set default route: %v\nOutput: %s", err, string(out))
 		}
-	default:
-		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
 
 	debugLog("Successfully set default route")
