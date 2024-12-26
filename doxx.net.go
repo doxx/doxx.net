@@ -49,6 +49,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -90,6 +91,8 @@ type RouteManager struct {
 	clientIP     string
 	serverIP     string
 	killRoute    bool
+	keepSSH      bool
+	sshRoutes    []string
 	mu           sync.Mutex
 }
 
@@ -101,11 +104,13 @@ type AuthResponse struct {
 	Message    string `json:"message"`
 }
 
-func NewRouteManager(tunIface string, killRoute bool) *RouteManager {
+func NewRouteManager(tunIface string, killRoute bool, keepSSH bool) *RouteManager {
 	return &RouteManager{
 		tunInterface: tunIface,
 		staticRoutes: make([]string, 0),
+		sshRoutes:    make([]string, 0),
 		killRoute:    killRoute,
+		keepSSH:      keepSSH,
 	}
 }
 
@@ -198,6 +203,11 @@ func (rm *RouteManager) Setup(serverAddr string) error {
 
 	debugLog("Using VPN server IP from auth response for default route")
 
+	// Preserve SSH connections before setting default route
+	if err := rm.preserveExistingSSHConnections(); err != nil {
+		log.Printf("Warning: Failed to preserve SSH connections: %v", err)
+	}
+
 	// Set new default route via TUN using VPN server IP from auth response
 	if err := rm.setDefaultRoute(rm.tunInterface, rm.serverIP); err != nil {
 		return fmt.Errorf("failed to set default route: %v", err)
@@ -209,6 +219,14 @@ func (rm *RouteManager) Setup(serverAddr string) error {
 func (rm *RouteManager) Cleanup() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+
+	// Remove SSH routes first
+	for _, route := range rm.sshRoutes {
+		debugLog("Removing SSH route: %s", route)
+		if err := rm.removeStaticRoute(route); err != nil {
+			log.Printf("Failed to remove SSH route %s: %v", route, err)
+		}
+	}
 
 	// Remove static routes
 	for _, route := range rm.staticRoutes {
@@ -353,6 +371,7 @@ func main() {
 		noRouting  bool
 		killRoute  bool
 		proxyURL   string
+		keepSSH    bool
 	)
 
 	// Print ASCII logo before flag parsing
@@ -364,6 +383,7 @@ func main() {
 	flag.BoolVar(&noRouting, "no-routing", false, "Disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
 	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port, https://user:pass@host:port, or socks5://user:pass@host:port)")
+	flag.BoolVar(&keepSSH, "keep-established-ssh", false, "Maintain existing SSH connections through original default route")
 	flag.Parse()
 
 	if debug {
@@ -396,7 +416,7 @@ func main() {
 	// Create route manager only if routing is enabled
 	var routeManager *RouteManager
 	if !noRouting {
-		routeManager = NewRouteManager(iface.Name(), killRoute)
+		routeManager = NewRouteManager(iface.Name(), killRoute, keepSSH)
 	}
 
 	// Create transport based on type
@@ -452,9 +472,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Only proceed with interface setup if we have a valid IP
-	if response.AssignedIP == "" {
-		log.Fatal("No IP address assigned by server")
+	// Only proceed with interface setup if we have a valid IP and server IP
+	if response == nil || response.AssignedIP == "" || response.ServerIP == "" {
+		log.Fatal("Invalid response from server: missing IP information")
 	}
 
 	log.Printf("Successfully authenticated. Assigned IP: %s", response.AssignedIP)
@@ -823,6 +843,25 @@ func (rm *RouteManager) getCurrentDefaultRoute() (string, string, error) {
 }
 
 func (rm *RouteManager) addStaticRoute(dst, gw, iface string) error {
+	rm.mu.Lock()
+	// Check for duplicates in staticRoutes
+	for _, route := range rm.staticRoutes {
+		if route == dst {
+			rm.mu.Unlock()
+			debugLog("Route %s already exists, skipping", dst)
+			return nil
+		}
+	}
+	// Check for duplicates in sshRoutes
+	for _, route := range rm.sshRoutes {
+		if route == dst {
+			rm.mu.Unlock()
+			debugLog("SSH route %s already exists, skipping", dst)
+			return nil
+		}
+	}
+	rm.mu.Unlock()
+
 	debugLog("Adding static route for %s via %s on %s", dst, gw, iface)
 
 	// First try to remove any existing route
@@ -979,4 +1018,117 @@ func (rm *RouteManager) SetServerIP(serverIP string) {
 	rm.mu.Lock()
 	rm.serverIP = serverIP
 	rm.mu.Unlock()
+}
+
+func (rm *RouteManager) preserveExistingSSHConnections() error {
+	if !rm.keepSSH {
+		return nil
+	}
+
+	debugLog("Preserving existing SSH connections")
+
+	switch runtime.GOOS {
+	case "darwin":
+		// Use netstat to find established SSH connections
+		cmd := exec.Command("netstat", "-n", "-p", "tcp")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get netstat output: %v", err)
+		}
+
+		debugLog("Parsing netstat output:\n%s", string(output))
+
+		// Updated regex to better match macOS netstat output
+		// Looking for connections to remote port 22
+		re := regexp.MustCompile(`(?m)^tcp\d*\s+\d+\s+\d+\s+\S+\s+(\d+\.\d+\.\d+\.\d+)\.22\s+.*?ESTABLISHED`)
+		matches := re.FindAllStringSubmatch(string(output), -1)
+
+		debugLog("Found %d SSH connections", len(matches))
+
+		for _, match := range matches {
+			remoteIP := match[1]
+			debugLog("Found established SSH connection to %s", remoteIP)
+			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
+				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
+				continue
+			}
+			rm.mu.Lock()
+			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
+			rm.mu.Unlock()
+			debugLog("Successfully preserved route to SSH host %s", remoteIP)
+		}
+
+		// Also look for local SSH server connections (connections to our port 22)
+		reLocal := regexp.MustCompile(`(?m)^tcp\d*\s+\d+\s+\d+\s+(\d+\.\d+\.\d+\.\d+)\.22\s+\S+\s+.*?ESTABLISHED`)
+		localMatches := reLocal.FindAllStringSubmatch(string(output), -1)
+
+		debugLog("Found %d incoming SSH connections", len(localMatches))
+
+		for _, match := range localMatches {
+			remoteIP := match[1]
+			debugLog("Found established incoming SSH connection from %s", remoteIP)
+			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
+				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
+				continue
+			}
+			rm.mu.Lock()
+			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
+			rm.mu.Unlock()
+			debugLog("Successfully preserved route to SSH client %s", remoteIP)
+		}
+
+		if len(matches) == 0 && len(localMatches) == 0 {
+			debugLog("No established SSH connections found")
+		}
+
+	case "linux":
+		// Use ss command to find established SSH connections
+		cmd := exec.Command("ss", "-n", "-t", "state", "established", "sport", ":22")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get ss output: %v", err)
+		}
+
+		// Parse ss output for remote IPs
+		re := regexp.MustCompile(`(?m)\d+\.\d+\.\d+\.\d+:\d+`)
+		matches := re.FindAllString(string(output), -1)
+
+		for _, match := range matches {
+			remoteIP := strings.Split(match, ":")[0]
+			debugLog("Found established SSH connection to %s", remoteIP)
+			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
+				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
+				continue
+			}
+			rm.mu.Lock()
+			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
+			rm.mu.Unlock()
+		}
+
+	case "windows":
+		// Use netstat to find established SSH connections
+		cmd := exec.Command("netstat", "-n", "-p", "TCP")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get netstat output: %v", err)
+		}
+
+		// Parse netstat output for SSH connections (port 22)
+		re := regexp.MustCompile(`(?m)TCP\s+\d+\.\d+\.\d+\.\d+:\d+\s+(\d+\.\d+\.\d+\.\d+):22\s+ESTABLISHED`)
+		matches := re.FindAllStringSubmatch(string(output), -1)
+
+		for _, match := range matches {
+			remoteIP := match[1]
+			debugLog("Found established SSH connection to %s", remoteIP)
+			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
+				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
+				continue
+			}
+			rm.mu.Lock()
+			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
+			rm.mu.Unlock()
+		}
+	}
+
+	return nil
 }
