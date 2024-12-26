@@ -46,9 +46,10 @@ import (
 
 // SingleTCPEncryptedClient implements the TransportType interface
 type SingleTCPEncryptedClient struct {
-	conn   *tls.Conn
-	cert   tls.Certificate
-	config *tls.Config
+	conn      *tls.Conn
+	cert      tls.Certificate
+	config    *tls.Config
+	bwMonitor *BandwidthMonitor
 }
 
 // NewSingleTCPEncryptedClient creates a new encrypted TCP client
@@ -66,8 +67,9 @@ func NewSingleTCPEncryptedClient() (TransportType, error) {
 	}
 
 	return &SingleTCPEncryptedClient{
-		cert:   cert,
-		config: config,
+		cert:      cert,
+		config:    config,
+		bwMonitor: NewBandwidthMonitor("tcp-encrypted"),
 	}, nil
 }
 
@@ -127,11 +129,21 @@ func (t *SingleTCPEncryptedClient) Connect(addr string) error {
 }
 
 func (t *SingleTCPEncryptedClient) ReadPacket() ([]byte, error) {
-	return readPacket(t.conn)
+	data, err := readPacket(t.conn)
+	if err != nil {
+		return nil, err
+	}
+	t.bwMonitor.AddBytesIn(uint64(len(data)))
+	return data, nil
 }
 
 func (t *SingleTCPEncryptedClient) WritePacket(packet []byte) error {
-	return writePacket(t.conn, packet)
+	err := writePacket(t.conn, packet)
+	if err != nil {
+		return err
+	}
+	t.bwMonitor.AddBytesOut(uint64(len(packet)))
+	return nil
 }
 
 func (t *SingleTCPEncryptedClient) SendAuth(token string) error {
