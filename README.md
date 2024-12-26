@@ -136,7 +136,11 @@ The cat found a way under the red velvet rope. 0x1F4A1 still flickers in the dar
 
 ### 1. Create an Account
 ```bash
+# Using curl:
 curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
+
+# Using wget:
+wget --post-data "create_account=your.email@example.com" https://setup.doxx.net/
 ```
 
 You'll receive a verification email containing your authentication token.
@@ -144,7 +148,11 @@ You'll receive a verification email containing your authentication token.
 
 NOTE: You can also request a new token if it's been lost or compromised. You will receive a new email with the new token valid for 15 minutes. Your old token will be valid until you have used the new reset token.  
 ```bash
+# Using curl:
 curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
+
+# Using wget:
+wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
 ```
 
 
