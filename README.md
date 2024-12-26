@@ -12,7 +12,7 @@
 
 # **doxx.net (BETA): The Ultimate Stealth VPN and Darknet Service**
 
-**doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **TCP**, **encrypted TCP**, and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
+**doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **encrypted TCP** and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
 
 Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techniques to disguise your TCP traffic as HTTPS requests, allowing it to slip through corporate firewalls undetected.
 
@@ -42,115 +42,7 @@ Join us on Discord: https://discord.gg/es546Rt9
 
 ---
 
-## 🌐 **What is Doxx.net?**
-Doxx.net is **a VPN-based darknet network designed to pierce through firewalls, avoid detection, and provide a new layer of internet freedom**. Think of it as a **virtual second internet** that operates on top of the traditional web.
-
-### **Key Features of Doxx.net:**
-1. **Firewall Piercing:** Works even in heavily restricted internet environments.
-2. **Static Virtual IP (10.x.x.x):** Every user gets a **unique static IP address** within the Doxx network.
-3. **Peer-to-Peer Communication:** Communicate securely with others on the Doxx network without routing through public internet.
-4. **Decentralized Potential:** Plans to become a **fully federated VPN-mesh network** where every client can also act as a server.
-5. **Encrypted Traffic:** All traffic is encrypted, making it harder to intercept or monitor.
-6. **Alternative Infrastructure:** Offers free `.doxx` domain names and SSL certificates.
-
-**Metaphor:** Imagine trying to send a package (data) in a country where postal services are heavily monitored. Doxx.net lets you send that package using **birds (alternative secure routes)** instead of traditional postal trucks.
-
-## 🧱 What role does a CDN play?
-Services like Cloudflare, Akamai Technologies, Fastly, and Amazon CloudFront are not only widely accessible but also integral to the global internet infrastructure. In regions with restrictive networks, alternatives such as CDNetworks in Russia, ArvanCloud in Iran, or ChinaCache in China may serve as viable proxies. These CDNs support millions of websites across critical sectors, including government and healthcare, making them indispensable. Blocking them risks significant collateral damage, which inadvertently makes them reliable pathways for bypassing restrictions.
-
-## ⛓️💥 Stop Network Censorship
-Internet censorship is a significant issue in many countries, where governments restrict access to information by blocking websites and services. For instance, China employs the "Great Firewall" to block platforms like Facebook and Twitter, while Iran restricts access to social media and messaging apps. In Russia, authorities have intensified efforts to control information flow by blocking virtual private networks (VPNs) and other tools that citizens use to bypass censorship.
-
-AP NEWS
- In such environments, a tool that tunnels TCP traffic over HTTP(S) through a Content Delivery Network (CDN) like Cloudflare can be invaluable. By disguising restricted traffic as regular web traffic, this method can effectively circumvent censorship measures, granting users access to blocked content and preserving the free flow of information.
-
-```
-                                FIREWALL/CENSORSHIP
-                                |     |     |     |
-                                v     v     v     v
-
-[Client]──────┐                ┌──────────────────┐                ┌─────────[Target Service]
-              │                │                  │                │       (e.g., HTTPs)
-              │                │   CLOUDFLARE     │                │
-              │tcp             │     NETWORK      │                │
-[doxx.net     │                │                  │                │ [doxx.net server]
- client]──────┼───HTTPS───────>│ (looks like      │─-HTTPS-───────>│      | 
-  |           │                │  normal traffic) │                │      \/ 
-  \/          │     vpn        │                  │     vpn        │   VPN interface
- VPN          └────────────────┼──────────────────┼────────────────┘   doxx.net darknet
-Interface                      │                  │
-                               └──────────────────┘
-
-Flow:
-1. HTTPS traffic ──> doxx.net client
-2. Wrapped as HTTPS ──> Cloudflare CDN (or any CDN)
-3. Forwarded to ──> doxx.net server services
-4. Unwrapped back to VPN
-```
-
-The cat found a way under the red velvet rope. 0x1F4A1 still flickers in the dark.
-
-## Quick Start
-
-### 1. Create an Account
-```bash
-curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
-```
-
-You'll receive a verification email containing your authentication token.
-
-
-NOTE: You can also request a new token if it's been lost or compromised. You will receive a new email with the new token valid for 15 minutes. Your old token will be valid until you have used the new reset token.  
-```bash
-curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
-```
-
-
-### 2. Install the Client
-
-1. Download the appropriate binary for your system from the [releases page](https://github.com/yourusername/doxx.net/releases).
-
-2. Create a symbolic link based on your system architecture:
-
-```bash
-# macOS (Apple Silicon M1/M2)
-ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
-
-# macOS (Intel)
-ln -s ./bin/doxx.net-darwin-amd64 ./doxx.net
-
-# Linux (AMD64/x86_64)
-ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
-
-# Windows
-# No symlink needed - use doxx.net.exe directly
-```
-
-3. Make the binary executable (Unix-based systems only):
-```bash
-chmod +x ./doxx.net
-```
-
-Note: For Windows users, the executable can be run directly without additional setup.
-
-
-### 3. Connect to VPN
-
-Choose one of the following connection methods:
-
-#### TCP Encrypted (Recommended)
-
-bash
-sudo ./doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
-
-#### HTTPS Mode
-sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
-
-
-## Available Servers
-
-### TCP Encrypted Servers
-- tcp-encrypted.mia.us.doxx.net:443 (Miami)
+## 🌐 **What is doxx.net:443 (Miami)
 - tcp-encrypted.lax.us.doxx.net:443 (Los Angeles)
 
 ### HTTPS Servers
@@ -179,6 +71,9 @@ ip route add x.x.x.x via 10.1.0.100
 
 **4. Server and -type missmatch:**  
 - For https and cdn you must use -type https and for tcp-encrypted servers use -type tcp-encrypted.
+
+**5. Disconnects and Crashes Causing Default route issues:** 
+- If you are experiencing disconnects and crashes, you may need to readd the default route.
 
 
 ## Advanced Configuration
