@@ -42,18 +42,18 @@ Join us on Discord: https://discord.gg/es546Rt9
 
 ---
 
-## 🌐 **What is Doxx.net?**
-Doxx.net is **a VPN-based darknet network designed to pierce through firewalls, avoid detection, and provide a new layer of internet freedom**. Think of it as a **virtual second internet** that operates on top of the traditional web.
+## 🌐 **What is doxx.net?**
+doxx.net is **a VPN-based darknet network designed to pierce through firewalls, avoid detection, and provide a new layer of internet freedom**. Think of it as a **virtual second internet** that operates on top of the traditional web.
 
-### **Key Features of Doxx.net:**
+### **Key Features of doxx.net:**
 1. **Firewall Piercing:** Works even in heavily restricted internet environments.
-2. **Static Virtual IP (10.x.x.x):** Every user gets a **unique static IP address** within the Doxx network.
-3. **Peer-to-Peer Communication:** Communicate securely with others on the Doxx network without routing through public internet.
+2. **Static Virtual IP (10.x.x.x):** Every user gets a **unique static IP address** within the doxx network.
+3. **Peer-to-Peer Communication:** Communicate securely with others on the doxx network without routing through public internet.
 4. **Decentralized Potential:** Plans to become a **fully federated VPN-mesh network** where every client can also act as a server.
 5. **Encrypted Traffic:** All traffic is encrypted, making it harder to intercept or monitor.
 6. **Alternative Infrastructure:** Offers free `.doxx` domain names and SSL certificates.
 
-**Metaphor:** Imagine trying to send a package (data) in a country where postal services are heavily monitored. Doxx.net lets you send that package using **birds (alternative secure routes)** instead of traditional postal trucks.
+**Metaphor:** Imagine trying to send a package (data) in a country where postal services are heavily monitored. doxx.net lets you send that package using **birds (alternative secure routes)** instead of traditional postal trucks.
 
 ## 🧱 What role does a CDN play?
 Services like Cloudflare, Akamai Technologies, Fastly, and Amazon CloudFront are not only widely accessible but also integral to the global internet infrastructure. In regions with restrictive networks, alternatives such as CDNetworks in Russia, ArvanCloud in Iran, or ChinaCache in China may serve as viable proxies. These CDNs support millions of websites across critical sectors, including government and healthcare, making them indispensable. Blocking them risks significant collateral damage, which inadvertently makes them reliable pathways for bypassing restrictions.
