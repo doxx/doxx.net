@@ -64,6 +64,48 @@ Internet censorship is a significant issue in many countries, where governments 
 AP NEWS
  In such environments, a tool that tunnels TCP traffic over HTTP(S) through a Content Delivery Network (CDN) like Cloudflare can be invaluable. By disguising restricted traffic as regular web traffic, this method can effectively circumvent censorship measures, granting users access to blocked content and preserving the free flow of information.
 
+## Understanding Routing
+
+### Default Routing Behavior
+By default, doxx.net manages all your internet traffic through its VPN tunnel. This means:
+- All your outbound connections are routed through the VPN
+- You get a new virtual IP address (10.x.x.x)
+- Your original internet connection becomes a backup route
+
+### Using -no-routing
+The `-no-routing` flag gives you manual control over what traffic goes through doxx.net. This is useful when you want to:
+
+1. **Split Tunneling**: Route only specific traffic through the VPN
+2. **Selective Privacy**: Choose which applications use the VPN
+3. **Performance Optimization**: Keep latency-sensitive applications on your direct connection
+
+#### Example: Manual Route Configuration
+```bash
+# Start doxx.net without automatic routing
+./doxx.net -token YOUR_TOKEN -server cdn.mia.us.doxx.net:443 -type https -no-routing
+
+# Route specific IP ranges through the VPN
+ip route add 192.168.1.0/24 via 10.1.0.100  # Route internal network
+ip route add 172.16.0.0/12 via 10.1.0.100   # Route private subnet
+
+# For Windows users:
+route ADD 192.168.1.0 MASK 255.255.255.0 10.1.0.100
+```
+
+### Common Routing Scenarios
+
+1. **Access Internal Networks**
+   ```bash
+   # Route traffic to a corporate network
+   ip route add 10.0.0.0/8 via 10.1.0.100
+   ```
+
+2. **Geographic Service Access**
+   ```bash
+   # Route specific website/service
+   ip route add 104.16.0.0/12 via 10.1.0.100
+   ```
+
 ```
                                 FIREWALL/CENSORSHIP
                                 |     |     |     |
