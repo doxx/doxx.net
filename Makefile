@@ -2,7 +2,7 @@ BINARY_DIR=bin
 
 .PHONY: all clean
 
-all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 mac-amd64 mac-arm64
+all: clean linux-amd64 linux-arm64 windows-amd64 mac-amd64 mac-arm64
 
 clean:
 	rm -rf $(BINARY_DIR)
@@ -15,10 +15,7 @@ linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-linux-arm64 doxx.net.go
 
 windows-amd64:
-	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net-windows-amd64.exe doxx.net.go
-
-windows-arm64:
-	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-windows-arm64.exe doxx.net.go
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net.exe doxx.net.go
 
 mac-amd64:
 	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net-darwin-amd64 doxx.net.go

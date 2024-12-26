@@ -108,23 +108,30 @@ curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
 
 ### 2. Install the Client
 
-Download the appropriate binary for your system:
+1. Download the appropriate binary for your system from the [releases page](https://github.com/yourusername/doxx.net/releases).
 
-bash
+2. Create a symbolic link based on your system architecture:
 
-For macOS ARM64 (M1/M2)
-
+```bash
+# macOS (Apple Silicon M1/M2)
 ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
 
-For macOS Intel
-
+# macOS (Intel)
 ln -s ./bin/doxx.net-darwin-amd64 ./doxx.net
 
-For Linux AMD64
-
+# Linux (AMD64/x86_64)
 ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
 
-For Windows, use the appropriate .exe file
+# Windows
+# No symlink needed - use doxx.net.exe directly
+```
+
+3. Make the binary executable (Unix-based systems only):
+```bash
+chmod +x ./doxx.net
+```
+
+Note: For Windows users, the executable can be run directly without additional setup.
 
 
 ### 3. Connect to VPN
@@ -255,6 +262,16 @@ This software is provided under a dual license:
 2. Commercial License (contact for details)
 
 The Commons Clause restricts using the software to provide commercial hosted services without a separate agreement.
+
+### Third-Party Licenses
+
+This software includes the following third-party open source software:
+
+- github.com/songgao/water: BSD-3-Clause License
+- github.com/klauspost/compress: BSD-3-Clause License
+- golang.org/x/sys: BSD-3-Clause License
+
+The full text of these licenses and their requirements must be included with any distribution of this software.
 
 
 Join us on Discord: https://discord.gg/es546Rt9
