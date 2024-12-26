@@ -64,12 +64,12 @@ const (
 	MTU         = 1500
 	HEADER_SIZE = 4
 	ASCII_LOGO  = `
-    ________                                         __   
-    \____  \  ____  ___  ___  ___    ____   ____   _/  |_ 
-     |  |\  \/  _ \ \  \/  / /  _\  /    \ /  _ \  \   __\
-     |  |/   ( <_> ) >    <  \_  \ |   |  ( <_> )   |  |  
-    /_______  \____/ /__/\_ \ \___/ |___|  /\____/  |__|  
-            \/            \/            \/               
+    _______                ___                    __   
+    \____  \  ____  ___  ___  \__   ____   ____ _/  |_ 
+     |  |\  \/  _ \ \  \/  /\   /  /    \ /  __\\   __\
+     |  |/   ( <_> ) >    </    \ |   |  (  ___)|  |  
+    /_______  \____/ /__/\_  /\__/|___|  /\____/|__|  
+            \/            \/          \/               
                         
      [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
      [ Secure Networking for Humans                       ]
@@ -417,6 +417,9 @@ func main() {
 	var routeManager *RouteManager
 	if !noRouting {
 		routeManager = NewRouteManager(iface.Name(), killRoute, keepSSH)
+	} else if keepSSH {
+		log.Printf("Warning: -keep-established-ssh is ignored when -no-routing is set")
+		keepSSH = false
 	}
 
 	// Create transport based on type
@@ -491,7 +494,7 @@ func main() {
 	}
 
 	// Setup routing if enabled
-	if !noRouting {
+	if routeManager != nil {
 		if err := routeManager.Setup(serverAddr); err != nil {
 			// Print the error but continue
 			log.Printf("Failed to setup routing: %v", err)
@@ -499,16 +502,18 @@ func main() {
 	}
 
 	// Add the helpful information with actual gateway - OS specific only
-	routeManager.mu.Lock()
-	switch runtime.GOOS {
-	case "darwin":
-		log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
-	case "linux":
-		log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
-	case "windows":
-		log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
+	if routeManager != nil {
+		routeManager.mu.Lock()
+		switch runtime.GOOS {
+		case "darwin":
+			log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
+		case "linux":
+			log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
+		case "windows":
+			log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
+		}
+		routeManager.mu.Unlock()
 	}
-	routeManager.mu.Unlock()
 
 	// Add debugging/testing information
 	log.Printf("To test connectivity:")
