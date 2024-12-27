@@ -45,18 +45,23 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"doxx.net/transport"
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 	"github.com/songgao/water"
 )
 
@@ -363,6 +368,589 @@ func (t *SingleTCPTransport) HandleAuth() (*AuthResponse, error) {
 	return &response, nil
 }
 
+// Add these new types for bandwidth monitoring
+type BandwidthStats struct {
+	rxBytes    uint64
+	txBytes    uint64
+	lastRx     uint64
+	lastTx     uint64
+	lastUpdate time.Time
+	mu         sync.Mutex
+}
+
+func NewBandwidthStats() *BandwidthStats {
+	return &BandwidthStats{
+		lastUpdate: time.Now(),
+	}
+}
+
+func (bs *BandwidthStats) Update(rx, tx uint64) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	now := time.Now()
+	duration := now.Sub(bs.lastUpdate).Seconds()
+
+	rxDiff := rx - bs.lastRx
+	txDiff := tx - bs.lastTx
+
+	// Calculate bytes per second
+	bs.rxBytes = uint64(float64(rxDiff) / duration)
+	bs.txBytes = uint64(float64(txDiff) / duration)
+
+	bs.lastRx = rx
+	bs.lastTx = tx
+	bs.lastUpdate = now
+}
+
+func (bs *BandwidthStats) GetReadable() string {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	return fmt.Sprintf("\r↓ %s/s  ↑ %s/s    ↓ %s  ↑ %s    ",
+		formatBytes(bs.rxBytes),
+		formatBytes(bs.txBytes),
+		formatBits(bs.rxBytes),
+		formatBits(bs.txBytes))
+}
+
+func formatBytes(bitsPerSec uint64) string {
+	switch {
+	case bitsPerSec >= 1_000_000_000: // 1 Gbps
+		return fmt.Sprintf("%.1f Gbps", float64(bitsPerSec)/1_000_000_000)
+	case bitsPerSec >= 1_000_000: // 1 Mbps
+		return fmt.Sprintf("%.1f Mbps", float64(bitsPerSec)/1_000_000)
+	case bitsPerSec >= 1_000: // 1 Kbps
+		return fmt.Sprintf("%.1f Kbps", float64(bitsPerSec)/1_000)
+	default:
+		if bitsPerSec < 1 {
+			return "0 bps"
+		}
+		return fmt.Sprintf("%.0f bps", float64(bitsPerSec))
+	}
+}
+
+func formatBits(bytes uint64) string {
+	bits := bytes * 8 // Convert bytes/sec to bits/sec
+	switch {
+	case bits >= 1000000000: // 1 Gbps
+		return fmt.Sprintf("%.1f Gbps", float64(bits)/1000000000)
+	case bits >= 1000000: // 1 Mbps
+		return fmt.Sprintf("%.1f Mbps", float64(bits)/1000000)
+	case bits >= 1000: // 1 Kbps
+		return fmt.Sprintf("%.1f Kbps", float64(bits)/1000)
+	default:
+		return fmt.Sprintf("%d bps", bits)
+	}
+}
+
+// Add after the existing types
+type Connection struct {
+	SourceIP     string
+	DestIP       string
+	SourcePort   int
+	DestPort     int
+	Protocol     string
+	ServiceName  string
+	BytesIn      uint64
+	BytesOut     uint64
+	LastActive   time.Time
+	lastBytesIn  uint64
+	lastBytesOut uint64
+	rateIn       float64
+	rateOut      float64
+	lastUpdate   time.Time
+	firstUpdate  bool
+}
+
+type ConnectionMonitor struct {
+	app         *tview.Application
+	flex        *tview.Flex
+	statsView   *tview.TextView
+	table       *tview.Table
+	connections map[string]*Connection
+	mu          sync.RWMutex
+	lastUpdate  time.Time
+	assignedIP  string
+	// Stats
+	totalRateIn  float64
+	totalRateOut float64
+	maxRate      float64
+	totalConns   int
+}
+
+func NewConnectionMonitor() (*ConnectionMonitor, error) {
+	cm := &ConnectionMonitor{
+		app:         tview.NewApplication(),
+		flex:        tview.NewFlex().SetDirection(tview.FlexRow),
+		statsView:   tview.NewTextView().SetTextAlign(tview.AlignLeft),
+		connections: make(map[string]*Connection),
+		lastUpdate:  time.Now(),
+	}
+
+	// Create and style the table
+	cm.table = tview.NewTable().
+		SetBorders(true).
+		SetBordersColor(tcell.ColorDarkGray)
+
+	// Style the stats view
+	cm.statsView.
+		SetTextColor(tcell.ColorGreen).
+		SetDynamicColors(true)
+
+	// Add components to flex layout
+	cm.flex.
+		AddItem(cm.statsView, 1, 1, false).
+		AddItem(cm.table, 0, 1, true)
+
+	// Set up the layout
+	cm.app.SetRoot(cm.flex, true)
+
+	// Handle keyboard input
+	cm.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' {
+			cm.app.Stop()
+		}
+		return event
+	})
+
+	return cm, nil
+}
+
+func (cm *ConnectionMonitor) SetAssignedIP(ip string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.assignedIP = ip
+}
+
+func (cm *ConnectionMonitor) UpdateConnection(packet []byte) {
+	ipHeader, err := parseIPHeader(packet)
+	if err != nil {
+		return
+	}
+
+	// Create unique connection ID
+	connID := fmt.Sprintf("%s:%d-%s:%d",
+		ipHeader.SrcIP, ipHeader.SrcPort,
+		ipHeader.DstIP, ipHeader.DstPort)
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	conn, exists := cm.connections[connID]
+	if !exists {
+		// Look up service name for the destination port
+		serviceName := lookupServiceName(ipHeader.DstPort)
+
+		conn = &Connection{
+			SourceIP:    ipHeader.SrcIP,
+			DestIP:      ipHeader.DstIP,
+			SourcePort:  ipHeader.SrcPort,
+			DestPort:    ipHeader.DstPort,
+			Protocol:    ipHeader.Protocol,
+			ServiceName: serviceName,
+			LastActive:  time.Now(),
+			lastUpdate:  time.Now(),
+			firstUpdate: true,
+		}
+		cm.connections[connID] = conn
+	}
+
+	now := time.Now()
+	duration := now.Sub(conn.lastUpdate).Seconds()
+	packetLen := uint64(len(packet))
+
+	// Only update rates if enough time has passed
+	if duration >= 2.0 { // Update every 2 seconds
+		// Determine direction based on our assigned IP
+		if ipHeader.SrcIP == cm.assignedIP {
+			// This is upload (from us to remote)
+			byteDiff := conn.BytesOut - conn.lastBytesOut
+			if !conn.firstUpdate {
+				// Store raw bytes per second (not bits yet)
+				conn.rateOut = float64(byteDiff) / duration
+			}
+			conn.BytesOut += packetLen
+			conn.lastBytesOut = conn.BytesOut
+		} else if ipHeader.DstIP == cm.assignedIP {
+			// This is download (from remote to us)
+			byteDiff := conn.BytesIn - conn.lastBytesIn
+			if !conn.firstUpdate {
+				// Store raw bytes per second (not bits yet)
+				conn.rateIn = float64(byteDiff) / duration
+			}
+			conn.BytesIn += packetLen
+			conn.lastBytesIn = conn.BytesIn
+		}
+
+		if conn.firstUpdate {
+			conn.firstUpdate = false
+		}
+		conn.lastUpdate = now
+	} else {
+		// Just accumulate bytes without updating rates
+		if ipHeader.SrcIP == cm.assignedIP {
+			conn.BytesOut += packetLen
+		} else if ipHeader.DstIP == cm.assignedIP {
+			conn.BytesIn += packetLen
+		}
+	}
+
+	conn.LastActive = now
+}
+
+func (cm *ConnectionMonitor) Render() {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	// Clear existing rows
+	cm.table.Clear()
+
+	// Get terminal size
+	_, _, width, height := cm.table.GetRect()
+	maxRows := (height - 2) / 2 // Adjust for table headers
+
+	// Calculate total bytes for this interval
+	var totalBytesIn, totalBytesOut uint64
+	for _, conn := range cm.connections {
+		if time.Since(conn.LastActive) <= 2*time.Second {
+			if conn.BytesIn > conn.lastBytesIn {
+				totalBytesIn += conn.BytesIn - conn.lastBytesIn
+			}
+			if conn.BytesOut > conn.lastBytesOut {
+				totalBytesOut += conn.BytesOut - conn.lastBytesOut
+			}
+		}
+	}
+
+	// Calculate rates in bits per second (multiply by 8 here only)
+	duration := 2.0 // our update interval
+	currentRateIn := (float64(totalBytesIn) / duration) * 8
+	currentRateOut := (float64(totalBytesOut) / duration) * 8
+
+	// Update max rate only if we see a higher value
+	currentMaxRate := math.Max(currentRateIn, currentRateOut)
+	if currentMaxRate > cm.maxRate {
+		cm.maxRate = currentMaxRate
+	}
+
+	// Update stats view with left padding
+	statsText := fmt.Sprintf(" Download: %s  Upload: %s  Peak: %s  Connections: %d",
+		formatBytes(uint64(currentRateIn)),
+		formatBytes(uint64(currentRateOut)),
+		formatBytes(uint64(cm.maxRate)),
+		cm.totalConns)
+	cm.statsView.SetText(statsText)
+
+	// Define column widths
+	columnWidths := []int{
+		width * 15 / 100, // Rate (15%)
+		width * 25 / 100, // Source IP (25%)
+		width * 15 / 100, // Source Port (15%)
+		width * 5 / 100,  // Arrow (5%)
+		width * 25 / 100, // Dest IP (25%)
+		width * 15 / 100, // Dest Port (15%)
+	}
+
+	// Set headers
+	headers := []string{
+		"Rate", "Source IP", "Source Port", "→",
+		"Dest IP", "Dest Port (Service)",
+	}
+	for i, header := range headers {
+		cell := tview.NewTableCell(header).
+			SetTextColor(tcell.ColorYellow).
+			SetAlign(tview.AlignCenter).
+			SetSelectable(false).
+			SetMaxWidth(columnWidths[i])
+		cm.table.SetCell(0, i, cell)
+	}
+
+	// Reset total rates for this render
+	cm.totalRateIn = 0
+	cm.totalRateOut = 0
+	cm.totalConns = 0
+
+	// Create a map to store paired connections
+	type sessionKey struct {
+		ip1, ip2     string
+		port1, port2 int
+	}
+	type sessionInfo struct {
+		sourceIP   string
+		destIP     string
+		sourcePort int
+		destPort   string // Include service name
+		rate       float64
+	}
+	sessions := make(map[sessionKey]*sessionInfo)
+
+	// Group connections into sessions
+	for _, conn := range cm.connections {
+		if time.Since(conn.LastActive) > 30*time.Second {
+			continue
+		}
+
+		// Create session keys for both directions
+		key1 := sessionKey{
+			ip1: conn.SourceIP, ip2: conn.DestIP,
+			port1: conn.SourcePort, port2: conn.DestPort,
+		}
+		key2 := sessionKey{
+			ip1: conn.DestIP, ip2: conn.SourceIP,
+			port1: conn.DestPort, port2: conn.SourcePort,
+		}
+
+		// Calculate bytes transferred in this interval
+		var bytesTransferred uint64
+		if conn.BytesIn > conn.lastBytesIn {
+			bytesTransferred += conn.BytesIn - conn.lastBytesIn
+		}
+		if conn.BytesOut > conn.lastBytesOut {
+			bytesTransferred += conn.BytesOut - conn.lastBytesOut
+		}
+
+		// Calculate rate in bits per second
+		rate := (float64(bytesTransferred) / 2.0) * 8 // Convert to bits/sec using same 2-second interval
+
+		// Update session info
+		if existing, exists := sessions[key1]; exists {
+			existing.rate += rate
+		} else if existing, exists := sessions[key2]; exists {
+			existing.rate += rate
+		} else {
+			// Create new session
+			sessions[key1] = &sessionInfo{
+				sourceIP:   conn.SourceIP,
+				destIP:     conn.DestIP,
+				sourcePort: conn.SourcePort,
+				destPort:   fmt.Sprintf("%d (%s)", conn.DestPort, conn.ServiceName),
+				rate:       rate,
+			}
+		}
+
+		// Update totals
+		cm.totalRateIn += conn.rateIn
+		cm.totalRateOut += conn.rateOut
+		if rate > cm.maxRate {
+			cm.maxRate = rate
+		}
+	}
+	cm.totalConns = len(sessions)
+
+	// Convert sessions to sorted slice
+	var sortedSessions []sessionInfo
+	for _, session := range sessions {
+		sortedSessions = append(sortedSessions, *session)
+	}
+
+	// Sort by rate
+	sort.Slice(sortedSessions, func(i, j int) bool {
+		return sortedSessions[i].rate > sortedSessions[j].rate
+	})
+
+	// Add rows
+	row := 1 // Start after header
+	for _, session := range sortedSessions {
+		if row >= maxRows {
+			break
+		}
+
+		cells := []string{
+			formatBytes(uint64(session.rate)),
+			session.sourceIP,
+			fmt.Sprintf("%d (%s)", session.sourcePort, lookupServiceName(session.sourcePort)),
+			"⇄",
+			session.destIP,
+			session.destPort,
+		}
+
+		for col, cell := range cells {
+			cm.table.SetCell(row, col,
+				tview.NewTableCell(cell).
+					SetTextColor(tcell.ColorWhite).
+					SetAlign(tview.AlignCenter).
+					SetMaxWidth(columnWidths[col]))
+		}
+		row++
+	}
+}
+
+func (cm *ConnectionMonitor) Start() {
+	go func() {
+		// Update UI every 2 seconds
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				cm.app.QueueUpdateDraw(func() {
+					cm.Render()
+				})
+			}
+		}
+	}()
+
+	if err := cm.app.Run(); err != nil {
+		log.Printf("Error running UI: %v", err)
+	}
+}
+
+func lookupServiceName(port int) string {
+	services := map[int]string{
+		// Common Web Services
+		80:   "HTTP",
+		443:  "HTTPS",
+		8080: "HTTP-ALT",
+		8443: "HTTPS-ALT",
+
+		// Email Services
+		25:  "SMTP",
+		465: "SMTPS",
+		587: "SUBMISSION",
+		110: "POP3",
+		995: "POP3S",
+		143: "IMAP",
+		993: "IMAPS",
+
+		// Remote Access
+		22:   "SSH",
+		23:   "TELNET",
+		3389: "RDP",
+		5900: "VNC",
+
+		// File Transfer
+		20:  "FTP-DATA",
+		21:  "FTP",
+		69:  "TFTP",
+		115: "SFTP",
+		989: "FTPS-DATA",
+		990: "FTPS",
+
+		// Name Services
+		53:  "DNS",
+		88:  "KERBEROS",
+		137: "NETBIOS-NS",
+		138: "NETBIOS-DGM",
+		139: "NETBIOS-SSN",
+		389: "LDAP",
+		636: "LDAPS",
+
+		// Database Services
+		1433:  "MSSQL",
+		1521:  "ORACLE",
+		3306:  "MYSQL",
+		5432:  "POSTGRES",
+		27017: "MONGODB",
+		6379:  "REDIS",
+
+		// Messaging & Collaboration
+		5222: "XMPP",
+		5269: "XMPP-SERVER",
+		1935: "RTMP",
+		5060: "SIP",
+		5061: "SIPS",
+
+		// System Services
+		67:  "DHCP-SERVER",
+		68:  "DHCP-CLIENT",
+		123: "NTP",
+		161: "SNMP",
+		162: "SNMP-TRAP",
+		514: "SYSLOG",
+
+		// Gaming
+		27015: "SRCDS",
+		25565: "MINECRAFT",
+
+		// Media Streaming
+		554:  "RTSP",
+		1755: "MMS",
+		8000: "ICECAST",
+
+		// VPN/Tunneling
+		500:  "ISAKMP",
+		1701: "L2TP",
+		1723: "PPTP",
+		1194: "OPENVPN",
+		4500: "IPSEC-NAT",
+
+		// Monitoring
+		8472: "VXLAN",
+		9100: "PROMETHEUS",
+		9090: "PROMETHEUS-API",
+
+		// Cloud Services
+		2379:  "ETCD",
+		6443:  "KUBERNETES-API",
+		10250: "KUBELET",
+	}
+
+	if service, ok := services[port]; ok {
+		return service
+	}
+	return "Unknown"
+}
+
+// Add this helper function to parse IP packets
+func parseIPHeader(packet []byte) (*struct {
+	SrcIP    string
+	DstIP    string
+	SrcPort  int
+	DstPort  int
+	Protocol string
+}, error) {
+	if len(packet) < 20 {
+		return nil, fmt.Errorf("packet too short")
+	}
+
+	version := packet[0] >> 4
+	if version != 4 {
+		return nil, fmt.Errorf("only IPv4 supported")
+	}
+
+	ihl := (packet[0] & 0x0F) * 4
+	protocol := packet[9]
+
+	srcIP := net.IP(packet[12:16]).String()
+	dstIP := net.IP(packet[16:20]).String()
+
+	// Parse ports for TCP/UDP
+	var srcPort, dstPort int
+	if protocol == 6 || protocol == 17 { // TCP or UDP
+		if len(packet) < int(ihl)+4 {
+			return nil, fmt.Errorf("packet too short for ports")
+		}
+		srcPort = int(binary.BigEndian.Uint16(packet[ihl : ihl+2]))
+		dstPort = int(binary.BigEndian.Uint16(packet[ihl+2 : ihl+4]))
+	}
+
+	protocolName := "Unknown"
+	switch protocol {
+	case 1:
+		protocolName = "ICMP"
+	case 6:
+		protocolName = "TCP"
+	case 17:
+		protocolName = "UDP"
+	}
+
+	return &struct {
+		SrcIP    string
+		DstIP    string
+		SrcPort  int
+		DstPort  int
+		Protocol string
+	}{
+		SrcIP:    srcIP,
+		DstIP:    dstIP,
+		SrcPort:  srcPort,
+		DstPort:  dstPort,
+		Protocol: protocolName,
+	}, nil
+}
+
 func main() {
 	var (
 		serverAddr string
@@ -372,6 +960,8 @@ func main() {
 		killRoute  bool
 		proxyURL   string
 		keepSSH    bool
+		bandwidth  bool
+		uber       bool
 	)
 
 	// Print ASCII logo before flag parsing
@@ -384,6 +974,8 @@ func main() {
 	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
 	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port, https://user:pass@host:port, or socks5://user:pass@host:port)")
 	flag.BoolVar(&keepSSH, "keep-established-ssh", false, "Maintain existing SSH connections through original default route")
+	flag.BoolVar(&bandwidth, "bandwidth", false, "Show bandwidth statistics")
+	flag.BoolVar(&uber, "uber", false, "Enable interactive connection monitoring UI")
 	flag.Parse()
 
 	if debug {
@@ -530,6 +1122,20 @@ func main() {
 	// Create packet buffer
 	packet := make([]byte, MTU)
 
+	// Initialize connection monitor if uber mode is enabled
+	var connectionMonitor *ConnectionMonitor
+	if uber {
+		monitor, err := NewConnectionMonitor()
+		if err != nil {
+			log.Printf("Warning: Failed to create connection monitor: %v", err)
+		} else {
+			connectionMonitor = monitor
+			// Set our assigned IP after we get it from the server
+			connectionMonitor.SetAssignedIP(strings.Split(response.AssignedIP, "/")[0])
+			go connectionMonitor.Start()
+		}
+	}
+
 	// TUN to Transport
 	wg.Add(1)
 	go func() {
@@ -552,6 +1158,10 @@ func main() {
 				if !isValidIPPacket(packet[:n]) {
 					debugLog("Skipping invalid IP packet from TUN")
 					continue
+				}
+
+				if connectionMonitor != nil {
+					connectionMonitor.UpdateConnection(packet[:n])
 				}
 
 				if err := client.WritePacket(packet[:n]); err != nil {
@@ -586,6 +1196,10 @@ func main() {
 				if !isValidIPPacket(pkt) {
 					debugLog("Received invalid IP packet, skipping")
 					continue
+				}
+
+				if connectionMonitor != nil {
+					connectionMonitor.UpdateConnection(pkt)
 				}
 
 				if _, err := iface.Write(pkt); err != nil {
@@ -656,6 +1270,33 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 		os.Exit(0)
 	}()
+
+	// Create bandwidth stats if enabled
+	var bandwidthStats *BandwidthStats
+	if bandwidth {
+		bandwidthStats = NewBandwidthStats()
+
+		// Start bandwidth display goroutine
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					stats, err := getInterfaceStats(iface.Name())
+					if err != nil {
+						debugLog("Failed to get interface stats: %v", err)
+						continue
+					}
+					bandwidthStats.Update(stats.rx, stats.tx)
+					fmt.Printf("\r%s", bandwidthStats.GetReadable())
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
 
 	// Wait for goroutines
 	wg.Wait()
@@ -957,24 +1598,6 @@ func (rm *RouteManager) removeStaticRoute(dst string) error {
 	}
 }
 
-func handleAuthResponse(conn net.Conn) (*AuthResponse, error) {
-	packet, err := readPacket(conn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read auth response: %v", err)
-	}
-
-	var response AuthResponse
-	if err := json.Unmarshal(packet, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse auth response: %v", err)
-	}
-
-	if !response.Success {
-		return nil, fmt.Errorf("authentication failed")
-	}
-
-	return &response, nil
-}
-
 func debugLog(format string, v ...interface{}) {
 	if debug {
 		log.Printf("[DEBUG] "+format, v...)
@@ -1136,4 +1759,78 @@ func (rm *RouteManager) preserveExistingSSHConnections() error {
 	}
 
 	return nil
+}
+
+// Add platform-specific interface statistics gathering
+type interfaceStats struct {
+	rx uint64
+	tx uint64
+}
+
+func getInterfaceStats(ifName string) (*interfaceStats, error) {
+	switch runtime.GOOS {
+	case "linux":
+		// Read from /sys/class/net/<interface>/statistics/
+		rxBytes, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/statistics/rx_bytes", ifName))
+		if err != nil {
+			return nil, err
+		}
+		txBytes, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/statistics/tx_bytes", ifName))
+		if err != nil {
+			return nil, err
+		}
+
+		rx, _ := strconv.ParseUint(strings.TrimSpace(string(rxBytes)), 10, 64)
+		tx, _ := strconv.ParseUint(strings.TrimSpace(string(txBytes)), 10, 64)
+
+		return &interfaceStats{rx: rx, tx: tx}, nil
+
+	case "darwin":
+		// Use netstat for macOS
+		cmd := exec.Command("netstat", "-I", ifName, "-b")
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, err
+		}
+
+		lines := strings.Split(string(output), "\n")
+		if len(lines) < 3 {
+			return nil, fmt.Errorf("unexpected netstat output")
+		}
+
+		fields := strings.Fields(lines[2])
+		if len(fields) < 7 {
+			return nil, fmt.Errorf("invalid netstat output format")
+		}
+
+		rx, _ := strconv.ParseUint(fields[6], 10, 64)
+		tx, _ := strconv.ParseUint(fields[9], 10, 64)
+
+		return &interfaceStats{rx: rx, tx: tx}, nil
+
+	case "windows":
+		// Use PowerShell for Windows
+		cmd := exec.Command("powershell", "-Command",
+			fmt.Sprintf("Get-NetAdapter | Where-Object Name -eq '%s' | Get-NetAdapterStatistics | Select BytesReceived,BytesSent | ConvertTo-Json", ifName))
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, err
+		}
+
+		var stats struct {
+			BytesReceived int64 `json:"BytesReceived"`
+			BytesSent     int64 `json:"BytesSent"`
+		}
+
+		if err := json.Unmarshal(output, &stats); err != nil {
+			return nil, err
+		}
+
+		return &interfaceStats{
+			rx: uint64(stats.BytesReceived),
+			tx: uint64(stats.BytesSent),
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 }
