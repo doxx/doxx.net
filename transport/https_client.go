@@ -64,7 +64,6 @@ type HTTPSTransportClient struct {
 	readBuffer     []byte
 	bufferMutex    sync.Mutex
 	pollInterval   time.Duration
-	bwMonitor      *BandwidthMonitor
 	currentBatch   int // Track number of packets in current batch
 	writeBuffer    []byte
 	writeBufferMux sync.Mutex
@@ -137,7 +136,6 @@ func NewHTTPSTransportClient(proxyConfig *ProxyConfig) TransportType {
 		batchTimeout: 20 * time.Millisecond,
 		lastWrite:    time.Now(),
 		fastPath:     false,
-		bwMonitor:    NewBandwidthMonitor("https"),
 	}
 }
 
@@ -312,7 +310,6 @@ func (t *HTTPSTransportClient) ReadPacket() ([]byte, error) {
 				t.currentBatch--
 				t.bufferMutex.Unlock()
 
-				t.bwMonitor.AddBytesIn(uint64(len(packet)))
 				return packet, nil
 			}
 		}
@@ -437,7 +434,6 @@ func (t *HTTPSTransportClient) sendImmediately(packet []byte) error {
 		return fmt.Errorf("fast write failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	t.bwMonitor.AddBytesOut(uint64(len(packet)))
 	return nil
 }
 
@@ -488,7 +484,6 @@ func (t *HTTPSTransportClient) flushWriteBuffer() error {
 		return fmt.Errorf("batch write failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	t.bwMonitor.AddBytesOut(uint64(len(t.writeBuffer)))
 	t.writeBuffer = nil
 	t.lastWrite = time.Now()
 
