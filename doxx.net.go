@@ -38,6 +38,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -45,29 +46,27 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"doxx.net/transport"
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
+	"github.com/jackpal/gateway"
+	psnet "github.com/shirou/gopsutil/v3/net"
 	"github.com/songgao/water"
 )
 
 const (
 	MTU         = 1500
 	HEADER_SIZE = 4
+	DNS_PORT    = 53
 	ASCII_LOGO  = `
     _______                ___                    __   
     \____  \  ____  ___  ___  \__   ____   ____ _/  |_ 
@@ -81,7 +80,12 @@ const (
 `
 )
 
-var debug bool
+var (
+	debug                 bool
+	snarfDNS              bool
+	bandwidthDisplayReady = make(chan struct{})
+	dnsNatTable           *DNSNatTable
+)
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
@@ -107,6 +111,28 @@ type AuthResponse struct {
 	PrefixLen  int    `json:"prefix_len"`
 	Status     string `json:"status"`
 	Message    string `json:"message"`
+}
+
+type GeoResponse struct {
+	IP      string `json:"ip"`
+	Country struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+	} `json:"country"`
+	City struct {
+		Name      string  `json:"name"`
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+	} `json:"city"`
+	Continent struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+	} `json:"continent"`
+	Timezone         string `json:"timezone"`
+	AutonomousSystem struct {
+		Number       int    `json:"number"`
+		Organization string `json:"organization"`
+	} `json:"autonomous_system"`
 }
 
 func NewRouteManager(tunIface string, killRoute bool, keepSSH bool) *RouteManager {
@@ -225,6 +251,12 @@ func (rm *RouteManager) Cleanup() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
+	// Only proceed with route cleanup if we have the original default gateway
+	if rm.defaultGW == "" {
+		debugLog("No default gateway stored, skipping route cleanup")
+		return nil
+	}
+
 	// Remove SSH routes first
 	for _, route := range rm.sshRoutes {
 		debugLog("Removing SSH route: %s", route)
@@ -254,40 +286,60 @@ func (rm *RouteManager) Cleanup() error {
 		return nil
 	}
 
-	debugLog("Restoring default route via %s on %s", rm.defaultGW, rm.defaultIface)
+	// Only attempt to restore default route if we have the necessary information
+	if rm.defaultGW != "" && rm.defaultIface != "" {
+		debugLog("Restoring default route via %s on %s", rm.defaultGW, rm.defaultIface)
 
-	// Restore original default route
-	switch runtime.GOOS {
-	case "darwin":
-		// First delete the current default route
-		delCmd := exec.Command("route", "-n", "delete", "default")
-		if out, err := delCmd.CombinedOutput(); err != nil {
-			debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
-			// Continue anyway as we want to try setting the new route
+		// Restore original default route
+		switch runtime.GOOS {
+		case "darwin":
+			// First delete the current default route
+			delCmd := exec.Command("route", "-n", "delete", "default")
+			if out, err := delCmd.CombinedOutput(); err != nil {
+				debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
+				// Continue anyway as we want to try setting the new route
+			}
+
+			// Add back the original default route
+			addCmd := exec.Command("route", "-n", "add", "default", rm.defaultGW)
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to restore default route: %v\nOutput: %s", err, string(out))
+			}
+
+		case "linux":
+			// First delete the current default route
+			delCmd := exec.Command("ip", "route", "del", "default")
+			if out, err := delCmd.CombinedOutput(); err != nil {
+				debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
+				// Continue anyway as we want to try setting the new route
+			}
+
+			// Add back the original default route
+			addCmd := exec.Command("ip", "route", "add", "default", "via", rm.defaultGW, "dev", rm.defaultIface)
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to restore default route: %v\nOutput: %s", err, string(out))
+			}
+
+		case "windows":
+			// First delete the current default route
+			delCmd := exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0")
+			if out, err := delCmd.CombinedOutput(); err != nil {
+				debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
+				// Continue anyway as we want to try setting the new route
+			}
+
+			// Add back the original default route
+			addCmd := exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", rm.defaultGW)
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to restore default route: %v\nOutput: %s", err, string(out))
+			}
 		}
 
-		// Add back the original default route
-		addCmd := exec.Command("route", "-n", "add", "default", rm.defaultGW)
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to restore default route: %v\nOutput: %s", err, string(out))
-		}
-
-	case "linux":
-		// First delete the current default route
-		delCmd := exec.Command("ip", "route", "del", "default")
-		if out, err := delCmd.CombinedOutput(); err != nil {
-			debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
-			// Continue anyway as we want to try setting the new route
-		}
-
-		// Add back the original default route
-		addCmd := exec.Command("ip", "route", "add", "default", "via", rm.defaultGW, "dev", rm.defaultIface)
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to restore default route: %v\nOutput: %s", err, string(out))
-		}
+		debugLog("Successfully restored default route")
+		return nil
 	}
 
-	debugLog("Successfully restored default route")
+	debugLog("No default route information available, skipping route restoration")
 	return nil
 }
 
@@ -311,10 +363,33 @@ func NewSingleTCPTransport() *SingleTCPTransport {
 }
 
 func (t *SingleTCPTransport) Connect(serverAddr string) error {
-	conn, err := net.Dial("tcp", serverAddr)
-	if err != nil {
-		return err
+	// Set a reasonable timeout for the initial connection
+	dialer := net.Dialer{
+		Timeout: 10 * time.Second,
 	}
+
+	conn, err := dialer.Dial("tcp", serverAddr)
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "no such host"):
+			return fmt.Errorf("cannot resolve %s - please check your DNS settings or internet connection", serverAddr)
+		case strings.Contains(err.Error(), "connection refused"):
+			return fmt.Errorf("connection refused to %s - please verify the server is running and accessible", serverAddr)
+		case strings.Contains(err.Error(), "i/o timeout"):
+			return fmt.Errorf("connection timed out - please check your internet connection and firewall settings")
+		case strings.Contains(err.Error(), "network is unreachable"):
+			return fmt.Errorf("network is unreachable - please check your network connection and default gateway")
+		default:
+			return fmt.Errorf("connection failed: %v", err)
+		}
+	}
+
+	// Set read/write timeouts for the established connection
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
 	t.conn = conn
 	return nil
 }
@@ -327,11 +402,42 @@ func (t *SingleTCPTransport) Close() error {
 }
 
 func (t *SingleTCPTransport) ReadPacket() ([]byte, error) {
-	return readPacket(t.conn)
+	if t.conn == nil {
+		return nil, fmt.Errorf("connection is closed")
+	}
+
+	// Set read deadline for each packet
+	if err := t.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return nil, fmt.Errorf("failed to set read deadline: %v", err)
+	}
+
+	packet, err := readPacket(t.conn)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return nil, fmt.Errorf("connection timed out - network may be down")
+		}
+		return nil, err
+	}
+	return packet, nil
 }
 
 func (t *SingleTCPTransport) WritePacket(packet []byte) error {
-	return writePacket(t.conn, packet)
+	if t.conn == nil {
+		return fmt.Errorf("connection is closed")
+	}
+
+	// Set write deadline for each packet
+	if err := t.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return fmt.Errorf("failed to set write deadline: %v", err)
+	}
+
+	if err := writePacket(t.conn, packet); err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return fmt.Errorf("write timed out - network may be down")
+		}
+		return err
+	}
+	return nil
 }
 
 func (t *SingleTCPTransport) SendAuth(token string) error {
@@ -407,26 +513,26 @@ func (bs *BandwidthStats) GetReadable() string {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	return fmt.Sprintf("\r↓ %s/s  ↑ %s/s    ↓ %s  ↑ %s    ",
+	return fmt.Sprintf("\r↓ %-12s  ↑ %-12s    ↓ %-10s  ↑ %-10s    ",
 		formatBytes(bs.rxBytes),
 		formatBytes(bs.txBytes),
 		formatBits(bs.rxBytes),
 		formatBits(bs.txBytes))
 }
 
-func formatBytes(bitsPerSec uint64) string {
+func formatBytes(bytes uint64) string {
 	switch {
-	case bitsPerSec >= 1_000_000_000: // 1 Gbps
-		return fmt.Sprintf("%.1f Gbps", float64(bitsPerSec)/1_000_000_000)
-	case bitsPerSec >= 1_000_000: // 1 Mbps
-		return fmt.Sprintf("%.1f Mbps", float64(bitsPerSec)/1_000_000)
-	case bitsPerSec >= 1_000: // 1 Kbps
-		return fmt.Sprintf("%.1f Kbps", float64(bitsPerSec)/1_000)
+	case bytes >= 1024*1024*1024: // 1 GB
+		return fmt.Sprintf("%.1f GB/s", float64(bytes)/(1024*1024*1024))
+	case bytes >= 1024*1024: // 1 MB
+		return fmt.Sprintf("%.1f MB/s", float64(bytes)/(1024*1024))
+	case bytes >= 1024: // 1 KB
+		return fmt.Sprintf("%.1f KB/s", float64(bytes)/1024)
 	default:
-		if bitsPerSec < 1 {
-			return "0 bps"
+		if bytes < 1 {
+			return "0 B/s"
 		}
-		return fmt.Sprintf("%.0f bps", float64(bitsPerSec))
+		return fmt.Sprintf("%d B/s", bytes)
 	}
 }
 
@@ -438,517 +544,45 @@ func formatBits(bytes uint64) string {
 	case bits >= 1000000: // 1 Mbps
 		return fmt.Sprintf("%.1f Mbps", float64(bits)/1000000)
 	case bits >= 1000: // 1 Kbps
-		return fmt.Sprintf("%.1f Kbps", float64(bits)/1000)
+		return fmt.Sprintf("%.1f kbps", float64(bits)/1000)
 	default:
 		return fmt.Sprintf("%d bps", bits)
 	}
 }
 
-// Add after the existing types
-type Connection struct {
-	SourceIP     string
-	DestIP       string
-	SourcePort   int
-	DestPort     int
-	Protocol     string
-	ServiceName  string
-	BytesIn      uint64
-	BytesOut     uint64
-	LastActive   time.Time
-	lastBytesIn  uint64
-	lastBytesOut uint64
-	rateIn       float64
-	rateOut      float64
-	lastUpdate   time.Time
-	firstUpdate  bool
-}
+func cleanup(routeManager *RouteManager, client transport.TransportType, ctx context.Context) {
+	log.Println("Starting cleanup...")
 
-type ConnectionMonitor struct {
-	app         *tview.Application
-	flex        *tview.Flex
-	statsView   *tview.TextView
-	table       *tview.Table
-	connections map[string]*Connection
-	mu          sync.RWMutex
-	lastUpdate  time.Time
-	assignedIP  string
-	// Stats
-	totalRateIn  float64
-	totalRateOut float64
-	maxRate      float64
-	totalConns   int
-}
+	// Create a timeout context for cleanup operations
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-func NewConnectionMonitor() (*ConnectionMonitor, error) {
-	cm := &ConnectionMonitor{
-		app:         tview.NewApplication(),
-		flex:        tview.NewFlex().SetDirection(tview.FlexRow),
-		statsView:   tview.NewTextView().SetTextAlign(tview.AlignLeft),
-		connections: make(map[string]*Connection),
-		lastUpdate:  time.Now(),
-	}
+	// Channel to track cleanup completion
+	done := make(chan bool)
 
-	// Create and style the table
-	cm.table = tview.NewTable().
-		SetBorders(true).
-		SetBordersColor(tcell.ColorDarkGray)
-
-	// Style the stats view
-	cm.statsView.
-		SetTextColor(tcell.ColorGreen).
-		SetDynamicColors(true)
-
-	// Add components to flex layout
-	cm.flex.
-		AddItem(cm.statsView, 1, 1, false).
-		AddItem(cm.table, 0, 1, true)
-
-	// Set up the layout
-	cm.app.SetRoot(cm.flex, true)
-
-	// Handle keyboard input
-	cm.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' {
-			cm.app.Stop()
-		}
-		return event
-	})
-
-	return cm, nil
-}
-
-func (cm *ConnectionMonitor) SetAssignedIP(ip string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.assignedIP = ip
-}
-
-func (cm *ConnectionMonitor) UpdateConnection(packet []byte) {
-	ipHeader, err := parseIPHeader(packet)
-	if err != nil {
-		return
-	}
-
-	// Create unique connection ID
-	connID := fmt.Sprintf("%s:%d-%s:%d",
-		ipHeader.SrcIP, ipHeader.SrcPort,
-		ipHeader.DstIP, ipHeader.DstPort)
-
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	conn, exists := cm.connections[connID]
-	if !exists {
-		// Look up service name for the destination port
-		serviceName := lookupServiceName(ipHeader.DstPort)
-
-		conn = &Connection{
-			SourceIP:    ipHeader.SrcIP,
-			DestIP:      ipHeader.DstIP,
-			SourcePort:  ipHeader.SrcPort,
-			DestPort:    ipHeader.DstPort,
-			Protocol:    ipHeader.Protocol,
-			ServiceName: serviceName,
-			LastActive:  time.Now(),
-			lastUpdate:  time.Now(),
-			firstUpdate: true,
-		}
-		cm.connections[connID] = conn
-	}
-
-	now := time.Now()
-	duration := now.Sub(conn.lastUpdate).Seconds()
-	packetLen := uint64(len(packet))
-
-	// Only update rates if enough time has passed
-	if duration >= 2.0 { // Update every 2 seconds
-		// Determine direction based on our assigned IP
-		if ipHeader.SrcIP == cm.assignedIP {
-			// This is upload (from us to remote)
-			byteDiff := conn.BytesOut - conn.lastBytesOut
-			if !conn.firstUpdate {
-				// Store raw bytes per second (not bits yet)
-				conn.rateOut = float64(byteDiff) / duration
-			}
-			conn.BytesOut += packetLen
-			conn.lastBytesOut = conn.BytesOut
-		} else if ipHeader.DstIP == cm.assignedIP {
-			// This is download (from remote to us)
-			byteDiff := conn.BytesIn - conn.lastBytesIn
-			if !conn.firstUpdate {
-				// Store raw bytes per second (not bits yet)
-				conn.rateIn = float64(byteDiff) / duration
-			}
-			conn.BytesIn += packetLen
-			conn.lastBytesIn = conn.BytesIn
-		}
-
-		if conn.firstUpdate {
-			conn.firstUpdate = false
-		}
-		conn.lastUpdate = now
-	} else {
-		// Just accumulate bytes without updating rates
-		if ipHeader.SrcIP == cm.assignedIP {
-			conn.BytesOut += packetLen
-		} else if ipHeader.DstIP == cm.assignedIP {
-			conn.BytesIn += packetLen
-		}
-	}
-
-	conn.LastActive = now
-}
-
-func (cm *ConnectionMonitor) Render() {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-
-	// Clear existing rows
-	cm.table.Clear()
-
-	// Get terminal size
-	_, _, width, height := cm.table.GetRect()
-	maxRows := (height - 2) / 2 // Adjust for table headers
-
-	// Calculate total bytes for this interval
-	var totalBytesIn, totalBytesOut uint64
-	for _, conn := range cm.connections {
-		if time.Since(conn.LastActive) <= 2*time.Second {
-			if conn.BytesIn > conn.lastBytesIn {
-				totalBytesIn += conn.BytesIn - conn.lastBytesIn
-			}
-			if conn.BytesOut > conn.lastBytesOut {
-				totalBytesOut += conn.BytesOut - conn.lastBytesOut
-			}
-		}
-	}
-
-	// Calculate rates in bits per second (multiply by 8 here only)
-	duration := 2.0 // our update interval
-	currentRateIn := (float64(totalBytesIn) / duration) * 8
-	currentRateOut := (float64(totalBytesOut) / duration) * 8
-
-	// Update max rate only if we see a higher value
-	currentMaxRate := math.Max(currentRateIn, currentRateOut)
-	if currentMaxRate > cm.maxRate {
-		cm.maxRate = currentMaxRate
-	}
-
-	// Update stats view with left padding
-	statsText := fmt.Sprintf(" Download: %s  Upload: %s  Peak: %s  Connections: %d",
-		formatBytes(uint64(currentRateIn)),
-		formatBytes(uint64(currentRateOut)),
-		formatBytes(uint64(cm.maxRate)),
-		cm.totalConns)
-	cm.statsView.SetText(statsText)
-
-	// Define column widths
-	columnWidths := []int{
-		width * 15 / 100, // Rate (15%)
-		width * 25 / 100, // Source IP (25%)
-		width * 15 / 100, // Source Port (15%)
-		width * 5 / 100,  // Arrow (5%)
-		width * 25 / 100, // Dest IP (25%)
-		width * 15 / 100, // Dest Port (15%)
-	}
-
-	// Set headers
-	headers := []string{
-		"Rate", "Source IP", "Source Port", "→",
-		"Dest IP", "Dest Port (Service)",
-	}
-	for i, header := range headers {
-		cell := tview.NewTableCell(header).
-			SetTextColor(tcell.ColorYellow).
-			SetAlign(tview.AlignCenter).
-			SetSelectable(false).
-			SetMaxWidth(columnWidths[i])
-		cm.table.SetCell(0, i, cell)
-	}
-
-	// Reset total rates for this render
-	cm.totalRateIn = 0
-	cm.totalRateOut = 0
-	cm.totalConns = 0
-
-	// Create a map to store paired connections
-	type sessionKey struct {
-		ip1, ip2     string
-		port1, port2 int
-	}
-	type sessionInfo struct {
-		sourceIP   string
-		destIP     string
-		sourcePort int
-		destPort   string // Include service name
-		rate       float64
-	}
-	sessions := make(map[sessionKey]*sessionInfo)
-
-	// Group connections into sessions
-	for _, conn := range cm.connections {
-		if time.Since(conn.LastActive) > 30*time.Second {
-			continue
-		}
-
-		// Create session keys for both directions
-		key1 := sessionKey{
-			ip1: conn.SourceIP, ip2: conn.DestIP,
-			port1: conn.SourcePort, port2: conn.DestPort,
-		}
-		key2 := sessionKey{
-			ip1: conn.DestIP, ip2: conn.SourceIP,
-			port1: conn.DestPort, port2: conn.SourcePort,
-		}
-
-		// Calculate bytes transferred in this interval
-		var bytesTransferred uint64
-		if conn.BytesIn > conn.lastBytesIn {
-			bytesTransferred += conn.BytesIn - conn.lastBytesIn
-		}
-		if conn.BytesOut > conn.lastBytesOut {
-			bytesTransferred += conn.BytesOut - conn.lastBytesOut
-		}
-
-		// Calculate rate in bits per second
-		rate := (float64(bytesTransferred) / 2.0) * 8 // Convert to bits/sec using same 2-second interval
-
-		// Update session info
-		if existing, exists := sessions[key1]; exists {
-			existing.rate += rate
-		} else if existing, exists := sessions[key2]; exists {
-			existing.rate += rate
-		} else {
-			// Create new session
-			sessions[key1] = &sessionInfo{
-				sourceIP:   conn.SourceIP,
-				destIP:     conn.DestIP,
-				sourcePort: conn.SourcePort,
-				destPort:   fmt.Sprintf("%d (%s)", conn.DestPort, conn.ServiceName),
-				rate:       rate,
-			}
-		}
-
-		// Update totals
-		cm.totalRateIn += conn.rateIn
-		cm.totalRateOut += conn.rateOut
-		if rate > cm.maxRate {
-			cm.maxRate = rate
-		}
-	}
-	cm.totalConns = len(sessions)
-
-	// Convert sessions to sorted slice
-	var sortedSessions []sessionInfo
-	for _, session := range sessions {
-		sortedSessions = append(sortedSessions, *session)
-	}
-
-	// Sort by rate
-	sort.Slice(sortedSessions, func(i, j int) bool {
-		return sortedSessions[i].rate > sortedSessions[j].rate
-	})
-
-	// Add rows
-	row := 1 // Start after header
-	for _, session := range sortedSessions {
-		if row >= maxRows {
-			break
-		}
-
-		cells := []string{
-			formatBytes(uint64(session.rate)),
-			session.sourceIP,
-			fmt.Sprintf("%d (%s)", session.sourcePort, lookupServiceName(session.sourcePort)),
-			"⇄",
-			session.destIP,
-			session.destPort,
-		}
-
-		for col, cell := range cells {
-			cm.table.SetCell(row, col,
-				tview.NewTableCell(cell).
-					SetTextColor(tcell.ColorWhite).
-					SetAlign(tview.AlignCenter).
-					SetMaxWidth(columnWidths[col]))
-		}
-		row++
-	}
-}
-
-func (cm *ConnectionMonitor) Start() {
 	go func() {
-		// Update UI every 2 seconds
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				cm.app.QueueUpdateDraw(func() {
-					cm.Render()
-				})
+		if routeManager != nil {
+			log.Println("Cleaning up routes...")
+			if err := routeManager.Cleanup(); err != nil {
+				log.Printf("Failed to cleanup routes: %v", err)
 			}
 		}
+
+		if client != nil {
+			log.Println("Closing transport client...")
+			client.Close()
+		}
+
+		done <- true
 	}()
 
-	if err := cm.app.Run(); err != nil {
-		log.Printf("Error running UI: %v", err)
+	// Wait for cleanup or timeout
+	select {
+	case <-done:
+		log.Println("Cleanup completed successfully")
+	case <-cleanupCtx.Done():
+		log.Println("Cleanup timed out")
 	}
-}
-
-func lookupServiceName(port int) string {
-	services := map[int]string{
-		// Common Web Services
-		80:   "HTTP",
-		443:  "HTTPS",
-		8080: "HTTP-ALT",
-		8443: "HTTPS-ALT",
-
-		// Email Services
-		25:  "SMTP",
-		465: "SMTPS",
-		587: "SUBMISSION",
-		110: "POP3",
-		995: "POP3S",
-		143: "IMAP",
-		993: "IMAPS",
-
-		// Remote Access
-		22:   "SSH",
-		23:   "TELNET",
-		3389: "RDP",
-		5900: "VNC",
-
-		// File Transfer
-		20:  "FTP-DATA",
-		21:  "FTP",
-		69:  "TFTP",
-		115: "SFTP",
-		989: "FTPS-DATA",
-		990: "FTPS",
-
-		// Name Services
-		53:  "DNS",
-		88:  "KERBEROS",
-		137: "NETBIOS-NS",
-		138: "NETBIOS-DGM",
-		139: "NETBIOS-SSN",
-		389: "LDAP",
-		636: "LDAPS",
-
-		// Database Services
-		1433:  "MSSQL",
-		1521:  "ORACLE",
-		3306:  "MYSQL",
-		5432:  "POSTGRES",
-		27017: "MONGODB",
-		6379:  "REDIS",
-
-		// Messaging & Collaboration
-		5222: "XMPP",
-		5269: "XMPP-SERVER",
-		1935: "RTMP",
-		5060: "SIP",
-		5061: "SIPS",
-
-		// System Services
-		67:  "DHCP-SERVER",
-		68:  "DHCP-CLIENT",
-		123: "NTP",
-		161: "SNMP",
-		162: "SNMP-TRAP",
-		514: "SYSLOG",
-
-		// Gaming
-		27015: "SRCDS",
-		25565: "MINECRAFT",
-
-		// Media Streaming
-		554:  "RTSP",
-		1755: "MMS",
-		8000: "ICECAST",
-
-		// VPN/Tunneling
-		500:  "ISAKMP",
-		1701: "L2TP",
-		1723: "PPTP",
-		1194: "OPENVPN",
-		4500: "IPSEC-NAT",
-
-		// Monitoring
-		8472: "VXLAN",
-		9100: "PROMETHEUS",
-		9090: "PROMETHEUS-API",
-
-		// Cloud Services
-		2379:  "ETCD",
-		6443:  "KUBERNETES-API",
-		10250: "KUBELET",
-	}
-
-	if service, ok := services[port]; ok {
-		return service
-	}
-	return "Unknown"
-}
-
-// Add this helper function to parse IP packets
-func parseIPHeader(packet []byte) (*struct {
-	SrcIP    string
-	DstIP    string
-	SrcPort  int
-	DstPort  int
-	Protocol string
-}, error) {
-	if len(packet) < 20 {
-		return nil, fmt.Errorf("packet too short")
-	}
-
-	version := packet[0] >> 4
-	if version != 4 {
-		return nil, fmt.Errorf("only IPv4 supported")
-	}
-
-	ihl := (packet[0] & 0x0F) * 4
-	protocol := packet[9]
-
-	srcIP := net.IP(packet[12:16]).String()
-	dstIP := net.IP(packet[16:20]).String()
-
-	// Parse ports for TCP/UDP
-	var srcPort, dstPort int
-	if protocol == 6 || protocol == 17 { // TCP or UDP
-		if len(packet) < int(ihl)+4 {
-			return nil, fmt.Errorf("packet too short for ports")
-		}
-		srcPort = int(binary.BigEndian.Uint16(packet[ihl : ihl+2]))
-		dstPort = int(binary.BigEndian.Uint16(packet[ihl+2 : ihl+4]))
-	}
-
-	protocolName := "Unknown"
-	switch protocol {
-	case 1:
-		protocolName = "ICMP"
-	case 6:
-		protocolName = "TCP"
-	case 17:
-		protocolName = "UDP"
-	}
-
-	return &struct {
-		SrcIP    string
-		DstIP    string
-		SrcPort  int
-		DstPort  int
-		Protocol string
-	}{
-		SrcIP:    srcIP,
-		DstIP:    dstIP,
-		SrcPort:  srcPort,
-		DstPort:  dstPort,
-		Protocol: protocolName,
-	}, nil
 }
 
 func main() {
@@ -961,7 +595,6 @@ func main() {
 		proxyURL   string
 		keepSSH    bool
 		bandwidth  bool
-		uber       bool
 	)
 
 	// Print ASCII logo before flag parsing
@@ -972,10 +605,10 @@ func main() {
 	flag.StringVar(&vpnType, "type", "tcp", "Transport type (tcp, tcp-encrypted, or https)")
 	flag.BoolVar(&noRouting, "no-routing", false, "Disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
-	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port, https://user:pass@host:port, or socks5://user:pass@host:port)")
-	flag.BoolVar(&keepSSH, "keep-established-ssh", false, "Maintain existing SSH connections through original default route")
+	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port)")
+	flag.BoolVar(&keepSSH, "keep-established-ssh", false, "Maintain existing SSH connections")
 	flag.BoolVar(&bandwidth, "bandwidth", false, "Show bandwidth statistics")
-	flag.BoolVar(&uber, "uber", false, "Enable interactive connection monitoring UI")
+	flag.BoolVar(&snarfDNS, "snarf-dns", false, "Snarf DNS traffic")
 	flag.Parse()
 
 	if debug {
@@ -988,33 +621,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Setup signal handling
+	// Set up signal handling early
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Create context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create TUN interface
-	config := water.Config{
+	iface, err := water.New(water.Config{
 		DeviceType: water.TUN,
-	}
-	iface, err := water.New(config)
+	})
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Failed to create TUN interface: %v", err)
+		cleanup(nil, nil, ctx)
+		os.Exit(1)
 	}
 
 	// Create route manager only if routing is enabled
 	var routeManager *RouteManager
 	if !noRouting {
 		routeManager = NewRouteManager(iface.Name(), killRoute, keepSSH)
-	} else if keepSSH {
-		log.Printf("Warning: -keep-established-ssh is ignored when -no-routing is set")
-		keepSSH = false
 	}
 
-	// Create transport based on type
+	// Create transport
 	var client transport.TransportType
 	switch vpnType {
 	case "tcp":
@@ -1023,63 +654,84 @@ func main() {
 		var initErr error
 		client, initErr = transport.NewSingleTCPEncryptedClient()
 		if initErr != nil {
-			log.Fatalf("Failed to create encrypted transport: %v", initErr)
+			log.Printf("Failed to create encrypted transport: %v", initErr)
+			cleanup(routeManager, nil, ctx)
+			os.Exit(1)
 		}
 	case "https":
 		var proxyConfig *transport.ProxyConfig
 		if proxyURL != "" {
-			var err error
 			proxyConfig, err = transport.ParseProxyURL(proxyURL)
 			if err != nil {
-				log.Fatalf("Invalid proxy URL: %v", err)
+				log.Printf("Invalid proxy URL: %v", err)
+				cleanup(routeManager, nil, ctx)
+				os.Exit(1)
 			}
 		}
 		client = transport.NewHTTPSTransportClient(proxyConfig)
 	default:
-		log.Fatalf("Unsupported transport type: %s", vpnType)
+		log.Printf("Unsupported transport type: %s", vpnType)
+		cleanup(routeManager, nil, ctx)
+		os.Exit(1)
 	}
 
-	// Connect using the transport
-	if err := client.Connect(serverAddr); err != nil {
-		log.Fatal(err)
-	}
-	defer client.Close()
+	// Create a timeout context for initial connection
+	connectCtx, connectCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer connectCancel()
 
-	log.Printf("Connected to VPN server at %s using %s transport", serverAddr, vpnType)
+	// Connect using the transport with timeout
+	connChan := make(chan error, 1)
+	go func() {
+		connChan <- client.Connect(serverAddr)
+	}()
+
+	select {
+	case err := <-connChan:
+		if err != nil {
+			log.Printf("Failed to connect: %v", err)
+			cleanup(routeManager, client, ctx)
+			os.Exit(1)
+		}
+	case <-connectCtx.Done():
+		log.Printf("Connection attempt timed out after 15 seconds")
+		cleanup(routeManager, client, ctx)
+		os.Exit(1)
+	case <-sigChan:
+		log.Println("Interrupted during connection attempt")
+		cleanup(routeManager, client, ctx)
+		os.Exit(1)
+	}
 
 	// Send authentication token
 	if err := client.SendAuth(token); err != nil {
-		log.Fatal("Failed to send authentication token:", err)
+		log.Printf("Failed to send authentication token: %v", err)
+		cleanup(routeManager, client, ctx)
+		os.Exit(1)
 	}
 
 	// Handle authentication response
 	response, err := client.HandleAuth()
 	if err != nil {
 		log.Printf("Authentication failed: %v", err)
-
-		// Clean shutdown on auth failure
-		if routeManager != nil && !noRouting {
-			if cleanupErr := routeManager.Cleanup(); cleanupErr != nil {
-				log.Printf("Failed to cleanup routes: %v", cleanupErr)
-			}
-		}
-		client.Close()
+		cleanup(routeManager, client, ctx)
 		os.Exit(1)
 	}
 
-	// Only proceed with interface setup if we have a valid IP and server IP
+	// Validate response
 	if response == nil || response.AssignedIP == "" || response.ServerIP == "" {
-		log.Fatal("Invalid response from server: missing IP information")
+		log.Printf("Invalid response from server: missing IP information")
+		cleanup(routeManager, client, ctx)
+		os.Exit(1)
 	}
 
-	log.Printf("Successfully authenticated. Assigned IP: %s", response.AssignedIP)
-
-	// Use the assigned IP and prefix length from server
+	// Setup TUN interface
 	if err := setupTUN(iface.Name(), response.AssignedIP, response.ServerIP, response.PrefixLen); err != nil {
-		log.Fatal(err)
+		log.Printf("Failed to setup TUN interface: %v", err)
+		cleanup(routeManager, client, ctx)
+		os.Exit(1)
 	}
 
-	// Set the client IP and server IP in the route manager before setup
+	// Set client and server IPs in route manager
 	if routeManager != nil {
 		routeManager.SetClientIP(response.AssignedIP)
 		routeManager.SetServerIP(response.ServerIP)
@@ -1088,8 +740,9 @@ func main() {
 	// Setup routing if enabled
 	if routeManager != nil {
 		if err := routeManager.Setup(serverAddr); err != nil {
-			// Print the error but continue
 			log.Printf("Failed to setup routing: %v", err)
+			cleanup(routeManager, client, ctx)
+			os.Exit(1)
 		}
 	}
 
@@ -1113,6 +766,9 @@ func main() {
 	log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
 	log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
 
+	// Now perform the geo lookup after routes are established
+	performGeoLookup()
+
 	// Create WaitGroup for goroutines
 	var wg sync.WaitGroup
 
@@ -1122,28 +778,52 @@ func main() {
 	// Create packet buffer
 	packet := make([]byte, MTU)
 
-	// Initialize connection monitor if uber mode is enabled
-	var connectionMonitor *ConnectionMonitor
-	if uber {
-		monitor, err := NewConnectionMonitor()
-		if err != nil {
-			log.Printf("Warning: Failed to create connection monitor: %v", err)
-		} else {
-			connectionMonitor = monitor
-			// Set our assigned IP after we get it from the server
-			connectionMonitor.SetAssignedIP(strings.Split(response.AssignedIP, "/")[0])
-			go connectionMonitor.Start()
+	// Create bandwidth stats if enabled
+	var bandwidthStats *BandwidthStats
+	if bandwidth {
+		bandwidthStats = NewBandwidthStats()
+
+		// Wait for geo information to be displayed before starting bandwidth
+		go func() {
+			select {
+			case <-bandwidthDisplayReady:
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-ticker.C:
+						stats, err := getInterfaceStats(iface.Name())
+						if err != nil {
+							debugLog("Failed to get interface stats: %v", err)
+							continue
+						}
+						bandwidthStats.Update(stats.rx, stats.tx)
+						fmt.Printf("\r%s", bandwidthStats.GetReadable())
+					case <-ctx.Done():
+						return
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}()
+	}
+
+	// Initialize DNS NAT table if DNS snarfing is enabled
+	// Add this BEFORE starting the goroutines
+	if snarfDNS {
+		debugLog("Initializing DNS NAT table")
+		dnsNatTable = NewDNSNatTable()
+		if dnsNatTable == nil {
+			log.Fatal("Failed to initialize DNS NAT table")
 		}
 	}
 
 	// TUN to Transport
 	wg.Add(1)
 	go func() {
-		defer func() {
-			debugLog("TUN to Transport goroutine exiting")
-			wg.Done()
-		}()
-
+		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -1160,11 +840,26 @@ func main() {
 					continue
 				}
 
-				if connectionMonitor != nil {
-					connectionMonitor.UpdateConnection(packet[:n])
+				//if debug {
+				// Log basic info about every packet
+				//proto := packet[9]
+				//srcIP := net.IP(packet[12:16])
+				//dstIP := net.IP(packet[16:20])
+				//debugLog("Packet: proto=%d src=%v dst=%v len=%d", proto, srcIP, dstIP, n)
+				//}
+
+				// Create a copy of the packet before modification
+				packetCopy := make([]byte, n)
+				copy(packetCopy, packet[:n])
+
+				if snarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+					if debug {
+						debugLog("Processing DNS packet")
+					}
+					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
 				}
 
-				if err := client.WritePacket(packet[:n]); err != nil {
+				if err := client.WritePacket(packetCopy); err != nil {
 					errChan <- fmt.Errorf("error writing to transport: %v", err)
 					return
 				}
@@ -1175,34 +870,35 @@ func main() {
 	// Transport to TUN
 	wg.Add(1)
 	go func() {
-		defer func() {
-			debugLog("Transport to TUN goroutine exiting")
-			wg.Done()
-		}()
-
+		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				pkt, err := client.ReadPacket()
+				packet, err := client.ReadPacket()
 				if err != nil {
-					if !strings.Contains(err.Error(), "use of closed network connection") {
-						errChan <- fmt.Errorf("error reading from transport: %v", err)
-					}
+					errChan <- fmt.Errorf("error reading from transport: %v", err)
 					return
 				}
 
-				if !isValidIPPacket(pkt) {
-					debugLog("Received invalid IP packet, skipping")
+				if !isValidIPPacket(packet) {
+					debugLog("Skipping invalid IP packet from transport")
 					continue
 				}
 
-				if connectionMonitor != nil {
-					connectionMonitor.UpdateConnection(pkt)
+				// Create a copy of the packet before modification
+				packetCopy := make([]byte, len(packet))
+				copy(packetCopy, packet)
+
+				if snarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+					if debug {
+						debugLog("Processing DNS packet from transport")
+					}
+					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
 				}
 
-				if _, err := iface.Write(pkt); err != nil {
+				if _, err := iface.Write(packetCopy); err != nil {
 					errChan <- fmt.Errorf("error writing to TUN: %v", err)
 					return
 				}
@@ -1213,17 +909,15 @@ func main() {
 	// Error and signal handling
 	go func() {
 		select {
-		case err := <-errChan:
-			debugLog("Error occurred: %v", err)
-			if strings.Contains(err.Error(), "error reading from transport") {
-				log.Printf("Server connection lost: %v", err)
-			}
-			cancel() // Trigger shutdown
 		case <-sigChan:
-			debugLog("Received shutdown signal")
-			cancel() // Trigger shutdown
+			log.Println("Received interrupt signal")
+			cleanup(routeManager, client, ctx)
+			cancel() // Cancel context to stop all goroutines
+			os.Exit(0)
 		case <-ctx.Done():
-			debugLog("Context cancelled")
+			log.Println("Context cancelled")
+			cleanup(routeManager, client, ctx)
+			os.Exit(0)
 		}
 
 		// Create a timeout context for cleanup
@@ -1260,43 +954,6 @@ func main() {
 		debugLog("Shutdown complete")
 		os.Exit(0)
 	}()
-
-	// Handle signals in a goroutine
-	go func() {
-		<-sigChan
-		log.Println("Received interrupt signal, cleaning up...")
-		cancel()
-		// Give a moment for cleanup
-		time.Sleep(100 * time.Millisecond)
-		os.Exit(0)
-	}()
-
-	// Create bandwidth stats if enabled
-	var bandwidthStats *BandwidthStats
-	if bandwidth {
-		bandwidthStats = NewBandwidthStats()
-
-		// Start bandwidth display goroutine
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ticker.C:
-					stats, err := getInterfaceStats(iface.Name())
-					if err != nil {
-						debugLog("Failed to get interface stats: %v", err)
-						continue
-					}
-					bandwidthStats.Update(stats.rx, stats.tx)
-					fmt.Printf("\r%s", bandwidthStats.GetReadable())
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
 
 	// Wait for goroutines
 	wg.Wait()
@@ -1400,7 +1057,7 @@ func isValidIPPacket(packet []byte) bool {
 	return version == 4 || version == 6
 }
 
-func isDNSPacket(packet []byte) bool {
+func isDNSPacket(packet []byte, serverIP net.IP) bool {
 	if len(packet) < 28 { // Minimum DNS packet size (IP + UDP + DNS header)
 		return false
 	}
@@ -1410,9 +1067,17 @@ func isDNSPacket(packet []byte) bool {
 		return false
 	}
 
-	// Extract UDP destination port (typically 53 for DNS)
+	// Extract ports
+	srcPort := (uint16(packet[20]) << 8) | uint16(packet[21])
 	dstPort := (uint16(packet[22]) << 8) | uint16(packet[23])
-	return dstPort == 53
+
+	// Get source IP for response checking
+	srcIP := net.IP(packet[12:16])
+
+	// It's a DNS packet if:
+	// 1. It's a query (destination port 53) OR
+	// 2. It's a response (source port 53 and source IP is our VPN server)
+	return dstPort == 53 || (srcPort == 53 && bytes.Equal(srcIP.To4(), serverIP.To4()))
 }
 
 func writePacket(conn net.Conn, packet []byte) error {
@@ -1455,37 +1120,35 @@ func readPacket(conn net.Conn) ([]byte, error) {
 }
 
 func (rm *RouteManager) getCurrentDefaultRoute() (string, string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		cmd := exec.Command("netstat", "-rn")
-		output, err := cmd.Output()
+	// Get default gateway IP
+	gw, err := gateway.DiscoverGateway()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to discover gateway: %v", err)
+	}
+
+	// Get all interfaces to find the one with this gateway
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get interfaces: %v", err)
+	}
+
+	// Find interface that can reach the gateway
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
 		if err != nil {
-			return "", "", err
+			continue
 		}
-		lines := strings.Split(string(output), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "default") {
-				fields := strings.Fields(line)
-				if len(fields) >= 4 {
-					return fields[1], fields[3], nil
+
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				if ipnet.Contains(gw) {
+					return gw.String(), iface.Name, nil
 				}
 			}
 		}
-		return "", "", fmt.Errorf("default route not found")
-	case "linux":
-		cmd := exec.Command("ip", "route", "show", "default")
-		output, err := cmd.Output()
-		if err != nil {
-			return "", "", err
-		}
-		fields := strings.Fields(string(output))
-		if len(fields) >= 5 {
-			return fields[2], fields[4], nil
-		}
-		return "", "", fmt.Errorf("default route not found")
-	default:
-		return "", "", fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
+
+	return "", "", fmt.Errorf("no default route found")
 }
 
 func (rm *RouteManager) addStaticRoute(dst, gw, iface string) error {
@@ -1655,109 +1318,40 @@ func (rm *RouteManager) preserveExistingSSHConnections() error {
 
 	debugLog("Preserving existing SSH connections")
 
-	switch runtime.GOOS {
-	case "darwin":
-		// Use netstat to find established SSH connections
-		cmd := exec.Command("netstat", "-n", "-p", "tcp")
-		output, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to get netstat output: %v", err)
-		}
+	// Use gopsutil to get TCP connections with the psnet alias
+	connections, err := psnet.Connections("tcp")
+	if err != nil {
+		return fmt.Errorf("failed to get network connections: %v", err)
+	}
 
-		debugLog("Parsing netstat output:\n%s", string(output))
+	sshCount := 0
+	for _, conn := range connections {
+		// Check for established SSH connections (port 22)
+		if conn.Status == "ESTABLISHED" && (conn.Laddr.Port == 22 || conn.Raddr.Port == 22) {
+			var remoteIP string
+			if conn.Laddr.Port == 22 {
+				remoteIP = conn.Raddr.IP // Incoming SSH connection
+			} else {
+				remoteIP = conn.Raddr.IP // Outgoing SSH connection
+			}
 
-		// Updated regex to better match macOS netstat output
-		// Looking for connections to remote port 22
-		re := regexp.MustCompile(`(?m)^tcp\d*\s+\d+\s+\d+\s+\S+\s+(\d+\.\d+\.\d+\.\d+)\.22\s+.*?ESTABLISHED`)
-		matches := re.FindAllStringSubmatch(string(output), -1)
+			debugLog("Found established SSH connection to/from %s", remoteIP)
 
-		debugLog("Found %d SSH connections", len(matches))
-
-		for _, match := range matches {
-			remoteIP := match[1]
-			debugLog("Found established SSH connection to %s", remoteIP)
 			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
 				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
 				continue
 			}
+
 			rm.mu.Lock()
 			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
 			rm.mu.Unlock()
+
+			sshCount++
 			debugLog("Successfully preserved route to SSH host %s", remoteIP)
-		}
-
-		// Also look for local SSH server connections (connections to our port 22)
-		reLocal := regexp.MustCompile(`(?m)^tcp\d*\s+\d+\s+\d+\s+(\d+\.\d+\.\d+\.\d+)\.22\s+\S+\s+.*?ESTABLISHED`)
-		localMatches := reLocal.FindAllStringSubmatch(string(output), -1)
-
-		debugLog("Found %d incoming SSH connections", len(localMatches))
-
-		for _, match := range localMatches {
-			remoteIP := match[1]
-			debugLog("Found established incoming SSH connection from %s", remoteIP)
-			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
-				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
-				continue
-			}
-			rm.mu.Lock()
-			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
-			rm.mu.Unlock()
-			debugLog("Successfully preserved route to SSH client %s", remoteIP)
-		}
-
-		if len(matches) == 0 && len(localMatches) == 0 {
-			debugLog("No established SSH connections found")
-		}
-
-	case "linux":
-		// Use ss command to find established SSH connections
-		cmd := exec.Command("ss", "-n", "-t", "state", "established", "sport", ":22")
-		output, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to get ss output: %v", err)
-		}
-
-		// Parse ss output for remote IPs
-		re := regexp.MustCompile(`(?m)\d+\.\d+\.\d+\.\d+:\d+`)
-		matches := re.FindAllString(string(output), -1)
-
-		for _, match := range matches {
-			remoteIP := strings.Split(match, ":")[0]
-			debugLog("Found established SSH connection to %s", remoteIP)
-			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
-				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
-				continue
-			}
-			rm.mu.Lock()
-			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
-			rm.mu.Unlock()
-		}
-
-	case "windows":
-		// Use netstat to find established SSH connections
-		cmd := exec.Command("netstat", "-n", "-p", "TCP")
-		output, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to get netstat output: %v", err)
-		}
-
-		// Parse netstat output for SSH connections (port 22)
-		re := regexp.MustCompile(`(?m)TCP\s+\d+\.\d+\.\d+\.\d+:\d+\s+(\d+\.\d+\.\d+\.\d+):22\s+ESTABLISHED`)
-		matches := re.FindAllStringSubmatch(string(output), -1)
-
-		for _, match := range matches {
-			remoteIP := match[1]
-			debugLog("Found established SSH connection to %s", remoteIP)
-			if err := rm.addStaticRoute(remoteIP+"/32", rm.defaultGW, rm.defaultIface); err != nil {
-				log.Printf("Warning: Failed to preserve SSH route to %s: %v", remoteIP, err)
-				continue
-			}
-			rm.mu.Lock()
-			rm.sshRoutes = append(rm.sshRoutes, remoteIP+"/32")
-			rm.mu.Unlock()
 		}
 	}
 
+	debugLog("Preserved %d SSH connections", sshCount)
 	return nil
 }
 
@@ -1768,69 +1362,348 @@ type interfaceStats struct {
 }
 
 func getInterfaceStats(ifName string) (*interfaceStats, error) {
-	switch runtime.GOOS {
-	case "linux":
-		// Read from /sys/class/net/<interface>/statistics/
-		rxBytes, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/statistics/rx_bytes", ifName))
-		if err != nil {
-			return nil, err
-		}
-		txBytes, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/statistics/tx_bytes", ifName))
-		if err != nil {
-			return nil, err
-		}
-
-		rx, _ := strconv.ParseUint(strings.TrimSpace(string(rxBytes)), 10, 64)
-		tx, _ := strconv.ParseUint(strings.TrimSpace(string(txBytes)), 10, 64)
-
-		return &interfaceStats{rx: rx, tx: tx}, nil
-
-	case "darwin":
-		// Use netstat for macOS
-		cmd := exec.Command("netstat", "-I", ifName, "-b")
-		output, err := cmd.Output()
-		if err != nil {
-			return nil, err
-		}
-
-		lines := strings.Split(string(output), "\n")
-		if len(lines) < 3 {
-			return nil, fmt.Errorf("unexpected netstat output")
-		}
-
-		fields := strings.Fields(lines[2])
-		if len(fields) < 7 {
-			return nil, fmt.Errorf("invalid netstat output format")
-		}
-
-		rx, _ := strconv.ParseUint(fields[6], 10, 64)
-		tx, _ := strconv.ParseUint(fields[9], 10, 64)
-
-		return &interfaceStats{rx: rx, tx: tx}, nil
-
-	case "windows":
-		// Use PowerShell for Windows
-		cmd := exec.Command("powershell", "-Command",
-			fmt.Sprintf("Get-NetAdapter | Where-Object Name -eq '%s' | Get-NetAdapterStatistics | Select BytesReceived,BytesSent | ConvertTo-Json", ifName))
-		output, err := cmd.Output()
-		if err != nil {
-			return nil, err
-		}
-
-		var stats struct {
-			BytesReceived int64 `json:"BytesReceived"`
-			BytesSent     int64 `json:"BytesSent"`
-		}
-
-		if err := json.Unmarshal(output, &stats); err != nil {
-			return nil, err
-		}
-
-		return &interfaceStats{
-			rx: uint64(stats.BytesReceived),
-			tx: uint64(stats.BytesSent),
-		}, nil
+	counters, err := psnet.IOCounters(true) // true for per-interface stats
+	if err != nil {
+		return nil, fmt.Errorf("failed to get interface statistics: %v", err)
 	}
 
-	return nil, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	for _, counter := range counters {
+		if counter.Name == ifName {
+			return &interfaceStats{
+				rx: counter.BytesRecv,
+				tx: counter.BytesSent,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("interface %s not found", ifName)
+}
+
+// Add this function to perform the geo lookup
+func performGeoLookup() {
+	// Run in a goroutine to not block main execution
+	go func() {
+		// Give more time for routes to stabilize and verify connectivity
+		time.Sleep(5 * time.Second)
+
+		// Try to ping the server first to verify connectivity
+		debugLog("Verifying connectivity before geo lookup...")
+		pingResp, err := http.Get("https://setup.doxx.net/ping")
+		if err != nil {
+			debugLog("Initial connectivity check failed: %v", err)
+			// Try one more time after a delay
+			time.Sleep(3 * time.Second)
+		}
+		if pingResp != nil {
+			pingResp.Body.Close()
+		}
+
+		debugLog("Attempting geo lookup...")
+		client := &http.Client{
+			Timeout: 10 * time.Second,
+		}
+
+		resp, err := client.Get("https://setup.doxx.net/geo/")
+		if err != nil {
+			log.Printf("Geo lookup request failed: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		var geoData GeoResponse
+		if err := json.NewDecoder(resp.Body).Decode(&geoData); err != nil {
+			debugLog("Failed to decode geo response: %v", err)
+			return
+		}
+
+		// Build a nice formatted output
+		var output strings.Builder
+		output.WriteString("\nConnection Details:\n")
+		output.WriteString("─────────────────────────────────\n")
+
+		// IP Address
+		output.WriteString(fmt.Sprintf("IP Address: %s\n", geoData.IP))
+
+		// Location information
+		if geoData.Country.Name != "" {
+			location := []string{}
+			if geoData.City.Name != "" {
+				location = append(location, geoData.City.Name)
+			}
+			if geoData.Country.Name != "" {
+				location = append(location, geoData.Country.Name)
+			}
+			output.WriteString(fmt.Sprintf("Location:   %s\n", strings.Join(location, ", ")))
+		}
+
+		// Coordinates if available
+		if geoData.City.Latitude != 0 && geoData.City.Longitude != 0 {
+			output.WriteString(fmt.Sprintf("Coords:     %.4f, %.4f\n",
+				geoData.City.Latitude,
+				geoData.City.Longitude))
+		}
+
+		// Timezone if available
+		if geoData.Timezone != "" {
+			output.WriteString(fmt.Sprintf("Timezone:   %s\n", geoData.Timezone))
+		}
+
+		// ASN information
+		if geoData.AutonomousSystem.Number != 0 {
+			output.WriteString(fmt.Sprintf("Network:    AS%d", geoData.AutonomousSystem.Number))
+			if geoData.AutonomousSystem.Organization != "" {
+				output.WriteString(fmt.Sprintf(" (%s)", geoData.AutonomousSystem.Organization))
+			}
+			output.WriteString("\n")
+		}
+
+		output.WriteString("─────────────────────────────────\n")
+
+		// Print the formatted output
+		fmt.Println(output.String())
+
+		// Signal that it's okay to start bandwidth display
+		close(bandwidthDisplayReady)
+	}()
+}
+
+// Add new NAT tracking structure
+type DNSNatEntry struct {
+	OriginalDst net.IP
+	OriginalSrc net.IP
+	QueryID     uint16 // DNS query ID for matching responses
+	LastUsed    time.Time
+}
+
+type DNSNatTable struct {
+	entries map[string]*DNSNatEntry // key: "clientIP:clientPort:queryID"
+	mu      sync.RWMutex
+}
+
+func NewDNSNatTable() *DNSNatTable {
+	nat := &DNSNatTable{
+		entries: make(map[string]*DNSNatEntry),
+	}
+	// Start cleanup goroutine
+	go nat.cleanup()
+	return nat
+}
+
+func (nat *DNSNatTable) cleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	for range ticker.C {
+		nat.mu.Lock()
+		now := time.Now()
+		for key, entry := range nat.entries {
+			if now.Sub(entry.LastUsed) > 1*time.Minute {
+				delete(nat.entries, key)
+			}
+		}
+		nat.mu.Unlock()
+	}
+}
+
+func (nat *DNSNatTable) Add(srcIP net.IP, srcPort uint16, dstIP net.IP, queryID uint16) {
+	key := fmt.Sprintf("%s:%d:%d", srcIP.String(), srcPort, queryID)
+	if debug {
+		debugLog("Adding NAT entry with key: %s, original DNS: %v", key, dstIP)
+	}
+	nat.mu.Lock()
+	nat.entries[key] = &DNSNatEntry{
+		OriginalDst: dstIP,
+		OriginalSrc: srcIP,
+		QueryID:     queryID,
+		LastUsed:    time.Now(),
+	}
+	nat.mu.Unlock()
+}
+
+func (nat *DNSNatTable) Lookup(clientIP net.IP, clientPort uint16, queryID uint16) *DNSNatEntry {
+	key := fmt.Sprintf("%s:%d:%d", clientIP.String(), clientPort, queryID)
+	if debug {
+		debugLog("Looking up NAT entry with key: %s", key)
+	}
+	nat.mu.RLock()
+	entry, exists := nat.entries[key]
+	nat.mu.RUnlock()
+	if exists {
+		nat.mu.Lock()
+		entry.LastUsed = time.Now()
+		nat.mu.Unlock()
+		if debug {
+			debugLog("Found NAT entry for key %s: original DNS was %v", key, entry.OriginalDst)
+		}
+		return entry
+	}
+	if debug {
+		debugLog("No NAT entry found for key: %s", key)
+	}
+	return nil
+}
+
+// Add to main VPN struct or where appropriate
+type VPNConfig struct {
+	// ... existing fields ...
+	snarfDNS    bool
+	dnsNatTable *DNSNatTable
+}
+
+// Function to handle DNS packet rewriting
+func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable) []byte {
+	// Ensure it's an IPv4 packet
+	if len(packet) < 20 || packet[0]>>4 != 4 {
+		return packet
+	}
+
+	// Check if UDP and port 53
+	if packet[9] != 17 { // UDP protocol
+		return packet
+	}
+
+	// Extract ports and query ID
+	srcPort := uint16(packet[20])<<8 | uint16(packet[21])
+	dstPort := uint16(packet[22])<<8 | uint16(packet[23])
+	queryID := uint16(packet[28])<<8 | uint16(packet[29])
+
+	srcIP := net.IP(packet[12:16])
+	dstIP := net.IP(packet[16:20])
+
+	if debug {
+		debugLog("Processing packet - src=%v:%d dst=%v:%d queryID=%d",
+			srcIP, srcPort, dstIP, dstPort, queryID)
+	}
+
+	// Handle DNS response (source port must be 53)
+	if srcPort == DNS_PORT && bytes.Equal(srcIP.To4(), serverIP.To4()) {
+		if debug {
+			debugLog("Detected DNS response from VPN server %v:%d to %v with queryID %d",
+				srcIP, srcPort, dstIP, queryID)
+		}
+
+		// Iterate through NAT entries to find matching query
+		natTable.mu.RLock()
+		for key, entry := range natTable.entries {
+			if entry.QueryID == queryID {
+				if debug {
+					debugLog("Found matching NAT entry: %s (queryID=%d)", key, queryID)
+					debugLog("Rewriting source IP from %v to %v", srcIP, entry.OriginalDst)
+				}
+				// Rewrite source IP to original DNS server
+				copy(packet[12:16], entry.OriginalDst.To4())
+				updateIPChecksum(packet)
+				if packet[26:28][0] != 0 || packet[26:28][1] != 0 {
+					updateUDPChecksum(packet)
+				}
+				natTable.mu.RUnlock()
+				return packet
+			}
+		}
+		natTable.mu.RUnlock()
+		if debug {
+			debugLog("No matching NAT entry found for DNS response (queryID=%d)", queryID)
+		}
+		return packet
+	}
+
+	// Handle outbound DNS query (destination port must be 53)
+	if dstPort == DNS_PORT {
+		originalDst := make(net.IP, 4)
+
+		copy(originalDst, packet[16:20])
+		clientIP := make(net.IP, 4)
+		copy(clientIP, packet[12:16])
+
+		if debug {
+			debugLog("DNS Query from %v:%d to %v with queryID %d",
+				clientIP, srcPort, originalDst, queryID)
+		}
+
+		// Add NAT entry
+		natTable.Add(clientIP, srcPort, originalDst, queryID)
+
+		// Rewrite destination IP to VPN server
+		copy(packet[16:20], serverIP.To4())
+		updateIPChecksum(packet)
+		if packet[26:28][0] != 0 || packet[26:28][1] != 0 {
+			updateUDPChecksum(packet)
+		}
+	}
+
+	return packet
+}
+
+// Helper function to update IP header checksum
+func updateIPChecksum(packet []byte) {
+	// Clear existing checksum
+	packet[10] = 0
+	packet[11] = 0
+
+	// Calculate new checksum
+	var sum uint32
+	for i := 0; i < 20; i += 2 {
+		sum += uint32(packet[i])<<8 | uint32(packet[i+1])
+	}
+
+	sum = (sum >> 16) + (sum & 0xffff)
+	sum = sum + (sum >> 16)
+
+	// Store new checksum
+	packet[10] = byte(^sum >> 8)
+	packet[11] = byte(^sum)
+}
+
+// Helper function to update UDP checksum
+func updateUDPChecksum(packet []byte) {
+	// Clear existing UDP checksum
+	packet[26] = 0
+	packet[27] = 0
+
+	ipHeaderLen := int(packet[0]&0x0F) * 4
+	udpLen := len(packet) - ipHeaderLen
+
+	// Calculate pseudo-header checksum
+	var sum uint32
+
+	// Add source IP address
+	for i := 12; i < 16; i += 2 {
+		sum += uint32(packet[i])<<8 | uint32(packet[i+1])
+	}
+
+	// Add destination IP address
+	for i := 16; i < 20; i += 2 {
+		sum += uint32(packet[i])<<8 | uint32(packet[i+1])
+	}
+
+	// Add protocol
+	sum += uint32(packet[9])
+
+	// Add UDP length
+	sum += uint32(udpLen)
+
+	// Add UDP header and data
+	for i := ipHeaderLen; i < len(packet)-1; i += 2 {
+		sum += uint32(packet[i])<<8 | uint32(packet[i+1])
+	}
+
+	// If packet length is odd, pad with zero
+	if (len(packet)-ipHeaderLen)%2 == 1 {
+		sum += uint32(packet[len(packet)-1]) << 8
+	}
+
+	// Fold 32-bit sum into 16 bits
+	for sum > 0xFFFF {
+		sum = (sum >> 16) + (sum & 0xFFFF)
+	}
+
+	// One's complement
+	checksum := ^uint16(sum)
+
+	// If checksum is 0, make it 0xFFFF (RFC 768)
+	if checksum == 0 {
+		checksum = 0xFFFF
+	}
+
+	// Store new UDP checksum
+	packet[26] = byte(checksum >> 8)
+	packet[27] = byte(checksum)
 }
