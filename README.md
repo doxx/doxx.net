@@ -28,6 +28,86 @@ Join us on Discord: https://discord.gg/es546Rt9
 - **Certificate Pinning:** Enhanced security through strict certificate validation, mitigating man-in-the-middle attacks.  
 - **Cross-Platform Compatibility:** Operates smoothly on **Linux**, **macOS**, and **Windows**, catering to a wide range of user environments.  
 - **Cloudflare CDN Integration:** Utilize **Cloudflare's extensive CDN infrastructure** to further obfuscate your traffic, making it indistinguishable from legitimate web requests.  
+---
+
+## Quick Start
+
+### 1. Create an Account
+```bash
+# Using curl:
+curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
+
+# Using wget:
+wget --post-data "create_account=your.email@example.com" https://setup.doxx.net/
+```
+
+You'll receive a verification email containing your authentication token.
+
+
+NOTE: You can also request a new token if it's been lost or compromised. You will receive a new email with the new token valid for 15 minutes. Your old token will be valid until you have used the new reset token.  
+```bash
+# Using curl:
+curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
+
+# Using wget:
+wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
+```
+
+
+### 2. Install the Client
+
+1. Download the appropriate binary for your system from the [releases page](https://github.com/yourusername/doxx.net/releases).
+
+2. Create a symbolic link based on your system architecture:
+
+```bash
+# macOS (Apple Silicon M1/M2)
+ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
+
+# macOS (Intel)
+ln -s ./bin/doxx.net-darwin-amd64 ./doxx.net
+
+# Linux (AMD64/x86_64)
+ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
+
+# Windows
+# No symlink needed - use doxx.net.exe directly
+```
+
+3. Make the binary executable (Unix-based systems only):
+```bash
+chmod +x ./doxx.net
+```
+
+Note: For Windows users, the executable can be run directly without additional setup.
+
+
+### 3. Connect to VPN
+
+Choose one of the following connection methods:
+
+#### TCP Encrypted (Recommended)
+
+bash
+sudo ./doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+
+#### HTTPS Mode
+sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+
+
+## Available Servers
+
+### TCP Encrypted Servers
+- tcp-encrypted.mia.us.doxx.net:443 (Miami)
+- tcp-encrypted.lax.us.doxx.net:443 (Los Angeles)
+
+### HTTPS Servers
+- https.mia.us.doxx.net:443 (Miami)
+- https.lax.us.doxx.net:443 (Los Angeles)
+
+### CDN-Protected Servers
+- cdn.mia.us.doxx.net:443 (Miami)
+- cdn.lax.us.doxx.net:443 (Los Angeles)
 
 ---
 
@@ -132,86 +212,6 @@ Flow:
 
 The cat found a way under the red velvet rope. 0x1F4A1 still flickers in the dark.
 
-## Quick Start
-
-### 1. Create an Account
-```bash
-# Using curl:
-curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
-
-# Using wget:
-wget --post-data "create_account=your.email@example.com" https://setup.doxx.net/
-```
-
-You'll receive a verification email containing your authentication token.
-
-
-NOTE: You can also request a new token if it's been lost or compromised. You will receive a new email with the new token valid for 15 minutes. Your old token will be valid until you have used the new reset token.  
-```bash
-# Using curl:
-curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
-
-# Using wget:
-wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
-```
-
-
-### 2. Install the Client
-
-1. Download the appropriate binary for your system from the [releases page](https://github.com/yourusername/doxx.net/releases).
-
-2. Create a symbolic link based on your system architecture:
-
-```bash
-# macOS (Apple Silicon M1/M2)
-ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
-
-# macOS (Intel)
-ln -s ./bin/doxx.net-darwin-amd64 ./doxx.net
-
-# Linux (AMD64/x86_64)
-ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
-
-# Windows
-# No symlink needed - use doxx.net.exe directly
-```
-
-3. Make the binary executable (Unix-based systems only):
-```bash
-chmod +x ./doxx.net
-```
-
-Note: For Windows users, the executable can be run directly without additional setup.
-
-
-### 3. Connect to VPN
-
-Choose one of the following connection methods:
-
-#### TCP Encrypted (Recommended)
-
-bash
-sudo ./doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
-
-#### HTTPS Mode
-sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
-
-
-## Available Servers
-
-### TCP Encrypted Servers
-- tcp-encrypted.mia.us.doxx.net:443 (Miami)
-- tcp-encrypted.lax.us.doxx.net:443 (Los Angeles)
-
-### HTTPS Servers
-- https.mia.us.doxx.net:443 (Miami)
-- https.lax.us.doxx.net:443 (Los Angeles)
-
-### CDN-Protected Servers
-- cdn.mia.us.doxx.net:443 (Miami)
-- cdn.lax.us.doxx.net:443 (Los Angeles)
-
-
 ## 🧩 **Common Issues and Solutions**
 
 **1. Connection Drops During SSH Sessions:**  
@@ -254,6 +254,16 @@ Usage of ./bin/doxx.net-darwin-arm64:
     	Authentication token
   -type string
     	Transport type (tcp-encrypted, or https) (default "tcp-encrypted")
+  -snarf-dns
+    Enables DNS query interception and tunneling through the VPN. When enabled:
+    - All DNS queries are automatically redirected through the VPN tunnel
+    - Prevents DNS leaks to your local network or ISP
+    - Ensures DNS queries are encrypted within the VPN tunnel
+    - Maintains the appearance of original DNS servers (e.g., 8.8.8.8) while routing through VPN
+    - Helps bypass DNS-based geo-restrictions and censorship
+    - Improves privacy by hiding DNS queries from network observers
+    - Default: false (DNS queries use system default routing)
+
 ```
 
 ## Technical Details
