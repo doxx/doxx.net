@@ -61,17 +61,14 @@ wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
 2. Create a symbolic link based on your system architecture:
 
 ```bash
-# macOS (Apple Silicon M1/M2)
-ln -s ./bin/doxx.net-darwin-arm64 ./doxx.net
+# macOS (Universal Binary amd64 and arm64)
+ln -s ./bin/doxx.net-mac ./doxx.net
 
-# macOS (Intel)
-ln -s ./bin/doxx.net-darwin-amd64 ./doxx.net
-
-# Linux (AMD64/x86_64)
+# Linux (AMD64 or x86_64)
 ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
 
-# Windows
-# No symlink needed - use doxx.net.exe directly
+# Windows (x86_64)
+No symlink needed - use doxx.net.exe directly
 ```
 
 3. Make the binary executable (Unix-based systems only):
