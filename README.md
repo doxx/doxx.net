@@ -14,7 +14,14 @@
 
 **doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **TCP**, **encrypted TCP**, and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
 
-Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techniques to disguise your TCP traffic as HTTPS requests, allowing it to slip through corporate firewalls undetected.
+Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techniques to camouflage your IP traffic as HTTPS requests, allowing it to slip through corporate firewalls undetected.
+
+Currently confirmed to bypass censorship in the following countries:
+- 🇨🇳 China
+- 🇷🇺 Russia
+- 🇮🇷 Iran
+- 🇸🇦 Saudi Arabia
+- 🇦🇪 United Arab Emirates
 
 Join us on Discord: https://discord.gg/es546Rt9
 ---
