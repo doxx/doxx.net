@@ -984,6 +984,11 @@ func setupTUN(ifName string, assignedIP string, serverIP string, prefixLen int) 
 			debugLog("Warning: failed to add server route: %v\nOutput: %s", err, string(out))
 		}
 
+		// Check for TAP driver on Windows
+		if err := checkWindowsTAPDriver(); err != nil {
+			log.Fatal(err)
+		}
+
 		debugLog("Basic Windows TAP setup completed")
 		return nil
 	case "linux":
@@ -1720,4 +1725,73 @@ func updateUDPChecksum(packet []byte) {
 	// Store new UDP checksum
 	packet[26] = byte(checksum >> 8)
 	packet[27] = byte(checksum)
+}
+
+func checkWindowsTAPDriver() error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	debugLog("Checking for OpenVPN TAP driver...")
+
+	// Check for TAP driver existence in registry
+	cmd := exec.Command("reg", "query",
+		`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\tap0901`,
+		"/v", "DisplayName")
+
+	if err := cmd.Run(); err != nil {
+		debugLog("TAP driver not found, offering to download installer...")
+
+		fmt.Println("\nOpenVPN TAP driver is required but not installed.")
+		fmt.Println("Would you like to download the installer? (y/n)")
+
+		var response string
+		fmt.Scanln(&response)
+
+		if strings.ToLower(response) == "y" {
+			// OpenVPN download URL
+			url := "https://swupdate.openvpn.org/community/releases/OpenVPN-2.5.8-I601-amd64.msi"
+
+			fmt.Printf("Downloading OpenVPN installer from %s...\n", url)
+
+			// Create a temporary file
+			tmpfile, err := os.CreateTemp("", "openvpn-*.msi")
+			if err != nil {
+				return fmt.Errorf("failed to create temporary file: %v", err)
+			}
+			defer os.Remove(tmpfile.Name())
+
+			// Download the file
+			resp, err := http.Get(url)
+			if err != nil {
+				return fmt.Errorf("failed to download installer: %v", err)
+			}
+			defer resp.Body.Close()
+
+			// Copy the response body to the temporary file
+			if _, err := io.Copy(tmpfile, resp.Body); err != nil {
+				return fmt.Errorf("failed to save installer: %v", err)
+			}
+			tmpfile.Close()
+
+			fmt.Printf("\nLaunching installer...\n")
+			fmt.Println("Please complete the installation and then restart this program.")
+
+			// Launch the installer
+			cmd := exec.Command("msiexec", "/i", tmpfile.Name())
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to run installer: %v", err)
+			}
+
+			// Exit after launching installer
+			os.Exit(0)
+		} else {
+			return fmt.Errorf("TAP driver is required but not installed. Please install OpenVPN: https://openvpn.net/community-downloads/")
+		}
+	}
+
+	debugLog("TAP driver found")
+	return nil
 }
