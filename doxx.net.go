@@ -967,36 +967,25 @@ func setupTUN(ifName string, assignedIP string, serverIP string, prefixLen int) 
 
 	switch runtime.GOOS {
 	case "windows":
-		// Convert prefix length to netmask
-		mask := net.CIDRMask(prefixLen, 32)
-		maskStr := fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
-
-		// Set IP address using netsh
-		addCmd := exec.Command("netsh", "interface", "ip", "set", "address",
-			fmt.Sprintf("name=%s", ifName),
-			"static",
-			clientIP,
-			maskStr)
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("error setting IP address: %v\nOutput: %s", err, string(out))
+		// Debug: Show current interface state
+		debugCmd := exec.Command("ipconfig", "/all")
+		if out, err := debugCmd.CombinedOutput(); err == nil {
+			debugLog("Current interface config:\n%s", string(out))
 		}
 
 		// Add route to server
-		routeCmd := exec.Command("netsh", "interface", "ip", "add", "route",
-			fmt.Sprintf("%s/32", serverIP),
-			ifName,
+		routeCmd := exec.Command("route", "add",
+			serverIP,
+			"mask", "255.255.255.255",
 			clientIP)
+		debugLog("Running command: route add %s mask 255.255.255.255 %s",
+			serverIP, clientIP)
 		if out, err := routeCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("error adding route: %v\nOutput: %s", err, string(out))
+			debugLog("Warning: failed to add server route: %v\nOutput: %s", err, string(out))
 		}
 
-		// Enable the interface
-		enableCmd := exec.Command("netsh", "interface", "set", "interface",
-			ifName, "enable")
-		if out, err := enableCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("error enabling interface: %v\nOutput: %s", err, string(out))
-		}
-
+		debugLog("Basic Windows TAP setup completed")
+		return nil
 	case "linux":
 		// First, flush any existing configuration
 		clearCmd := exec.Command("ip", "addr", "flush", "dev", ifName)
@@ -1201,6 +1190,24 @@ func (rm *RouteManager) addStaticRoute(dst, gw, iface string) error {
 				addCmd.ProcessState.ExitCode(), err, string(out))
 		}
 
+	case "windows":
+		// First try to remove any existing route
+		delCmd := exec.Command("route", "delete", dst)
+		if out, err := delCmd.CombinedOutput(); err != nil {
+			debugLog("Note: Could not delete existing route for %s: %v\nOutput: %s", dst, err, string(out))
+			// Continue anyway as the route might not exist
+		}
+
+		// Add the new route
+		addCmd := exec.Command("route", "-p", "add",
+			dst, "mask", "255.255.255.255",
+			gw)
+		debugLog("Running command: route -p add %s mask 255.255.255.255 %s", dst, gw)
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add route (exit code %d): %v\nOutput: %s",
+				addCmd.ProcessState.ExitCode(), err, string(out))
+		}
+
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
@@ -1256,6 +1263,13 @@ func (rm *RouteManager) removeStaticRoute(dst string) error {
 		return exec.Command("route", "delete", dst).Run()
 	case "linux":
 		return exec.Command("ip", "route", "del", dst).Run()
+	case "windows":
+		cmd := exec.Command("route", "delete", dst)
+		debugLog("Running command: route delete %s", dst)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to remove route: %v\nOutput: %s", err, string(out))
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
