@@ -97,15 +97,17 @@ sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type http
 ### TCP Encrypted Servers
 - tcp-encrypted.mia.us.doxx.net:443 (Miami)
 - tcp-encrypted.lax.us.doxx.net:443 (Los Angeles)
+- tcp-encrypted.ams.eu.doxx.net:443 (Amsterdam)
 
 ### HTTPS Servers
 - https.mia.us.doxx.net:443 (Miami)
 - https.lax.us.doxx.net:443 (Los Angeles)
+- https.ams.eu.doxx.net:443 (Amsterdam)
 
 ### CDN-Protected Servers
 - cdn.mia.us.doxx.net:443 (Miami)
 - cdn.lax.us.doxx.net:443 (Los Angeles)
-
+- cdn.ams.eu.doxx.net:443 (Amsterdam)
 ---
 
 ## 🛡️ **What is the Darknet?**
