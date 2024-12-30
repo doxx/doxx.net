@@ -91,6 +91,17 @@ chmod +x ./doxx.net
 
 Note: For Windows users, the executable can be run directly without additional setup.
 
+### Windows Setup
+Download and install the [TAP-Windows driver](https://build.openvpn.net/downloads/releases/tap-windows-9.24.2-I601-Win10.exe) (required for creating virtual network interfaces)
+
+**Important**: Always run doxx.net with Administrator privileges:
+   - Right-click on Command Prompt or PowerShell
+   - Select "Run as administrator"
+   - Navigate to the doxx.net directory
+   - Run your doxx.net commands
+
+Note: If you see "Access Denied" errors on Windows, this usually means you need to run the command prompt as Administrator.
+
 
 ### 3. Connect to VPN
 
@@ -98,11 +109,14 @@ Choose one of the following connection methods:
 
 #### TCP Encrypted (Recommended)
 
-bash
+```bash
 sudo ./doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+```
 
 #### HTTPS Mode
+```bash
 sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+```
 
 
 ## Available Servers
