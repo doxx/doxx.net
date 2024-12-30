@@ -40,6 +40,12 @@ Join us on Discord: https://discord.gg/es546Rt9
 ## Quick Start
 
 ### 1. Create an Account
+
+doxx.net doesn't use usernames or passwords. Instead, you'll receive an authentication token via email. This token is your key to the doxx.net network and is tied to your own ip address in the doxx.net network.
+
+To start using doxx.net, you'll need to create an account. Currently we're not supporting a web interface for creating accounts. You'll need to use the command line to create an account. It's very simple, here's how:
+
+
 ```bash
 # Using curl:
 curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
