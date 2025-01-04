@@ -60,7 +60,6 @@ import (
 	"doxx.net/transport"
 	"github.com/jackpal/gateway"
 	psnet "github.com/shirou/gopsutil/v3/net"
-	"github.com/songgao/water"
 )
 
 const (
@@ -585,6 +584,26 @@ func cleanup(routeManager *RouteManager, client transport.TransportType, ctx con
 	}
 }
 
+// Move hexDump function outside of main, at package level
+func hexDump(data []byte) string {
+	var buf strings.Builder
+	for i := 0; i < len(data); i += 16 {
+		end := i + 16
+		if end > len(data) {
+			end = len(data)
+		}
+		// Print hex
+		for j := i; j < end; j++ {
+			if j > i {
+				buf.WriteString(" ")
+			}
+			buf.WriteString(fmt.Sprintf("%02x", data[j]))
+		}
+		buf.WriteString("\n")
+	}
+	return buf.String()
+}
+
 func main() {
 	var (
 		serverAddr string
@@ -629,20 +648,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create TUN interface
-	iface, err := water.New(water.Config{
-		DeviceType: water.TUN,
-	})
+	// Create platform-specific interface
+	tunDevice, err := createTunDevice("doxx")
 	if err != nil {
-		log.Printf("Failed to create TUN interface: %v", err)
+		log.Printf("Failed to create TUN device: %v", err)
 		cleanup(nil, nil, ctx)
 		os.Exit(1)
 	}
+	defer tunDevice.Close()
 
 	// Create route manager only if routing is enabled
 	var routeManager *RouteManager
 	if !noRouting {
-		routeManager = NewRouteManager(iface.Name(), killRoute, keepSSH)
+		routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
 	}
 
 	// Create transport
@@ -725,7 +743,7 @@ func main() {
 	}
 
 	// Setup TUN interface
-	if err := setupTUN(iface.Name(), response.AssignedIP, response.ServerIP, response.PrefixLen); err != nil {
+	if err := setupTUN(tunDevice.Name(), response.AssignedIP, response.ServerIP, response.PrefixLen); err != nil {
 		log.Printf("Failed to setup TUN interface: %v", err)
 		cleanup(routeManager, client, ctx)
 		os.Exit(1)
@@ -769,6 +787,15 @@ func main() {
 	// Now perform the geo lookup after routes are established
 	performGeoLookup()
 
+	// Add default route after initial connectivity is confirmed
+	if routeManager != nil && !noRouting {
+		debugLog("Setting default route through VPN tunnel")
+		if err := routeManager.setDefaultRoute(tunDevice.Name(), response.ServerIP); err != nil {
+			log.Printf("Warning: Failed to set default route: %v", err)
+			// Don't exit, as the tunnel is still usable without default route
+		}
+	}
+
 	// Create WaitGroup for goroutines
 	var wg sync.WaitGroup
 
@@ -793,7 +820,7 @@ func main() {
 				for {
 					select {
 					case <-ticker.C:
-						stats, err := getInterfaceStats(iface.Name())
+						stats, err := getInterfaceStats(tunDevice.Name())
 						if err != nil {
 							debugLog("Failed to get interface stats: %v", err)
 							continue
@@ -829,24 +856,43 @@ func main() {
 			case <-ctx.Done():
 				return
 			default:
-				n, err := iface.Read(packet)
+				n, err := tunDevice.Read(packet)
 				if err != nil {
 					errChan <- fmt.Errorf("error reading from TUN: %v", err)
 					return
 				}
 
-				if !isValidIPPacket(packet[:n]) {
-					debugLog("Skipping invalid IP packet from TUN")
+				if n == 0 {
 					continue
 				}
 
-				//if debug {
-				// Log basic info about every packet
-				//proto := packet[9]
-				//srcIP := net.IP(packet[12:16])
-				//dstIP := net.IP(packet[16:20])
-				//debugLog("Packet: proto=%d src=%v dst=%v len=%d", proto, srcIP, dstIP, n)
-				//}
+				// Enhanced packet logging
+				if debug {
+					proto := packet[9]
+					srcIP := net.IP(packet[12:16])
+					dstIP := net.IP(packet[16:20])
+
+					srcPort := uint16(0)
+					dstPort := uint16(0)
+					if proto == 6 || proto == 17 {
+						srcPort = uint16(packet[20])<<8 | uint16(packet[21])
+						dstPort = uint16(packet[22])<<8 | uint16(packet[23])
+					}
+
+					debugLog("[TUN→Transport] Packet Details:\n"+
+						"Protocol: %d\n"+
+						"Source: %v:%d\n"+
+						"Destination: %v:%d\n"+
+						"Length: %d bytes\n"+
+						"Hex dump:\n%s",
+						proto, srcIP, srcPort, dstIP, dstPort, n,
+						hexDump(packet[:n]))
+				}
+
+				if !isValidIPPacket(packet[:n]) {
+					debugLog("[TUN→Transport] Skipping invalid IP packet from TUN")
+					continue
+				}
 
 				// Create a copy of the packet before modification
 				packetCopy := make([]byte, n)
@@ -882,8 +928,36 @@ func main() {
 					return
 				}
 
+				if _, err := tunDevice.Write(packet); err != nil {
+					errChan <- fmt.Errorf("error writing to interface: %v", err)
+					return
+				}
+
+				// Enhanced packet logging
+				if debug {
+					proto := packet[9]
+					srcIP := net.IP(packet[12:16])
+					dstIP := net.IP(packet[16:20])
+
+					srcPort := uint16(0)
+					dstPort := uint16(0)
+					if proto == 6 || proto == 17 {
+						srcPort = uint16(packet[20])<<8 | uint16(packet[21])
+						dstPort = uint16(packet[22])<<8 | uint16(packet[23])
+					}
+
+					debugLog("[Transport→TUN] Packet Details:\n"+
+						"Protocol: %d\n"+
+						"Source: %v:%d\n"+
+						"Destination: %v:%d\n"+
+						"Length: %d bytes\n"+
+						"Hex dump:\n%s",
+						proto, srcIP, srcPort, dstIP, dstPort, len(packet),
+						hexDump(packet))
+				}
+
 				if !isValidIPPacket(packet) {
-					debugLog("Skipping invalid IP packet from transport")
+					debugLog("[Transport→TUN] Skipping invalid IP packet from transport")
 					continue
 				}
 
@@ -898,7 +972,7 @@ func main() {
 					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
 				}
 
-				if _, err := iface.Write(packetCopy); err != nil {
+				if _, err := tunDevice.Write(packetCopy); err != nil {
 					errChan <- fmt.Errorf("error writing to TUN: %v", err)
 					return
 				}
@@ -967,29 +1041,59 @@ func setupTUN(ifName string, assignedIP string, serverIP string, prefixLen int) 
 
 	switch runtime.GOOS {
 	case "windows":
-		// Debug: Show current interface state
-		debugCmd := exec.Command("ipconfig", "/all")
-		if out, err := debugCmd.CombinedOutput(); err == nil {
-			debugLog("Current interface config:\n%s", string(out))
+		// Disable IPv6 completely
+		disableIPv6Cmd := exec.Command("netsh", "interface", "ipv6", "set", "interface",
+			ifName, "disabled")
+		debugLog("Executing command: %s", disableIPv6Cmd.String())
+		if output, err := disableIPv6Cmd.CombinedOutput(); err != nil {
+			debugLog("Failed to disable IPv6: %v\nOutput: %s", err, output)
 		}
 
-		// Add route to server
+		// Set MTU and metric
+		setMTUCmd := exec.Command("netsh", "interface", "ipv4", "set", "subinterface",
+			ifName, "mtu=1500", "store=persistent")
+		debugLog("Executing command: %s", setMTUCmd.String())
+		if output, err := setMTUCmd.CombinedOutput(); err != nil {
+			debugLog("Failed to set MTU: %v\nOutput: %s", err, output)
+		}
+
+		// Enable interface with metric 1
+		setMetricCmd := exec.Command("netsh", "interface", "ipv4", "set", "interface",
+			ifName, "metric=1")
+		debugLog("Executing command: %s", setMetricCmd.String())
+		if output, err := setMetricCmd.CombinedOutput(); err != nil {
+			debugLog("Failed to set metric: %v\nOutput: %s", err, output)
+		}
+
+		// Force static IP with specific binding
+		setIPCmd := exec.Command("netsh", "interface", "ip", "set", "address",
+			"name="+ifName,
+			"source=static",
+			"addr="+clientIP,
+			"mask=255.255.255.255")
+		debugLog("Executing command: %s", setIPCmd.String())
+		if output, err := setIPCmd.CombinedOutput(); err != nil {
+			debugLog("Failed to set IP: %v\nOutput: %s", err, output)
+		}
+
+		// Add static route back to the server
 		routeCmd := exec.Command("route", "add",
-			serverIP,
+			fmt.Sprintf("%s", serverIP),
 			"mask", "255.255.255.255",
-			clientIP)
-		debugLog("Running command: route add %s mask 255.255.255.255 %s",
-			serverIP, clientIP)
+			fmt.Sprintf("%s", clientIP))
+		debugLog("Executing command: %s", routeCmd.String())
 		if out, err := routeCmd.CombinedOutput(); err != nil {
-			debugLog("Warning: failed to add server route: %v\nOutput: %s", err, string(out))
+			debugLog("Warning: failed to add static 255.255.255.255 server return route: %v\nOutput: %s", err, string(out))
 		}
 
-		// Check for TAP driver on Windows
-		if err := checkWindowsTAPDriver(); err != nil {
-			log.Fatal(err)
+		// Debug: Show interface status
+		showIPCmd := exec.Command("netsh", "interface", "ip", "show", "addresses", ifName)
+		if output, err := showIPCmd.CombinedOutput(); err != nil {
+			debugLog("Failed to show IP: %v", err)
+		} else {
+			debugLog("Interface IP config:\n%s", output)
 		}
 
-		debugLog("Basic Windows TAP setup completed")
 		return nil
 	case "linux":
 		// First, flush any existing configuration
@@ -1048,7 +1152,13 @@ func isValidIPPacket(packet []byte) bool {
 	}
 
 	version := packet[0] >> 4
-	return version == 4 || version == 6
+	if version == 6 {
+		if debug {
+			debugLog("Skipping IPv6 packet (not supported)")
+		}
+		return false
+	}
+	return version == 4
 }
 
 func isDNSPacket(packet []byte, serverIP net.IP) bool {
@@ -1062,8 +1172,8 @@ func isDNSPacket(packet []byte, serverIP net.IP) bool {
 	}
 
 	// Extract ports
-	srcPort := (uint16(packet[20]) << 8) | uint16(packet[21])
-	dstPort := (uint16(packet[22]) << 8) | uint16(packet[23])
+	srcPort := uint16(packet[20])<<8 | uint16(packet[21])
+	dstPort := uint16(packet[22])<<8 | uint16(packet[23])
 
 	// Get source IP for response checking
 	srcIP := net.IP(packet[12:16])
@@ -1142,6 +1252,44 @@ func (rm *RouteManager) getCurrentDefaultRoute() (string, string, error) {
 		}
 	}
 
+	// Add Windows-specific implementation
+	if runtime.GOOS == "windows" {
+		// Get routing table
+		cmd := exec.Command("route", "print", "0.0.0.0")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get routing table: %v", err)
+		}
+
+		// Parse the output to find default gateway
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
+				gw := fields[2]
+				// Get interface name from interface index
+				ifaces, err := net.Interfaces()
+				if err != nil {
+					return gw, "", fmt.Errorf("failed to get interfaces: %v", err)
+				}
+				for _, iface := range ifaces {
+					addrs, err := iface.Addrs()
+					if err != nil {
+						continue
+					}
+					for _, addr := range addrs {
+						if ipnet, ok := addr.(*net.IPNet); ok {
+							if ipnet.Contains(net.ParseIP(gw)) {
+								return gw, iface.Name, nil
+							}
+						}
+					}
+				}
+				return gw, "", nil
+			}
+		}
+	}
+
 	return "", "", fmt.Errorf("no default route found")
 }
 
@@ -1196,22 +1344,31 @@ func (rm *RouteManager) addStaticRoute(dst, gw, iface string) error {
 		}
 
 	case "windows":
-		// First try to remove any existing route
-		delCmd := exec.Command("route", "delete", dst)
-		if out, err := delCmd.CombinedOutput(); err != nil {
-			debugLog("Note: Could not delete existing route for %s: %v\nOutput: %s", dst, err, string(out))
-			// Continue anyway as the route might not exist
+		// Parse CIDR to get network and mask
+		_, network, err := net.ParseCIDR(dst)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR: %v", err)
 		}
 
-		// Add the new route
-		addCmd := exec.Command("route", "-p", "add",
-			dst, "mask", "255.255.255.255",
-			gw)
-		debugLog("Running command: route -p add %s mask 255.255.255.255 %s", dst, gw)
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to add route (exit code %d): %v\nOutput: %s",
-				addCmd.ProcessState.ExitCode(), err, string(out))
+		// Convert netmask to Windows format
+		mask := network.Mask
+		maskStr := fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
+
+		// Remove CIDR notation from destination
+		dstIP := strings.Split(dst, "/")[0]
+
+		// Add the route with persistence (-p flag)
+		cmd := exec.Command("route", "-p", "add",
+			dstIP, "mask", maskStr,
+			gw, "metric", "1")
+
+		debugLog("Running command: route -p add %s mask %s %s metric 1",
+			dstIP, maskStr, gw)
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add route: %v\nOutput: %s", err, string(out))
 		}
+		return nil
 
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
@@ -1256,6 +1413,91 @@ func (rm *RouteManager) setDefaultRoute(iface string, serverIP string) error {
 		if out, err := addCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to set default route: %v\nOutput: %s", err, string(out))
 		}
+
+	case "windows":
+		// Maximum number of retries
+		maxRetries := 10
+		retryDelay := 1 * time.Second
+
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			// Get interface status
+			interfaces, err := net.Interfaces()
+			if err != nil {
+				lastErr = fmt.Errorf("failed to get network interfaces: %v", err)
+				debugLog("Attempt %d: %v", attempt+1, lastErr)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			var ifIndex int
+			var ifFlags net.Flags
+			for _, i := range interfaces {
+				if i.Name == iface {
+					ifIndex = i.Index
+					ifFlags = i.Flags
+					break
+				}
+			}
+
+			if ifIndex == 0 {
+				lastErr = fmt.Errorf("interface %s not found", iface)
+				debugLog("Attempt %d: %v", attempt+1, lastErr)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			// Check if interface is up and running
+			if ifFlags&net.FlagUp == 0 || ifFlags&net.FlagRunning == 0 {
+				lastErr = fmt.Errorf("interface %s is not up and running (flags: %v)", iface, ifFlags)
+				debugLog("Attempt %d: %v", attempt+1, lastErr)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			// First delete the current default route
+			delCmd := exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0")
+			if out, err := delCmd.CombinedOutput(); err != nil {
+				debugLog("Note: Could not delete current default route: %v\nOutput: %s", err, string(out))
+			}
+
+			// Add new default route via the VPN server IP with interface index
+			addCmd := exec.Command("route", "add",
+				"0.0.0.0", "mask", "0.0.0.0",
+				serverIP,
+				"if", fmt.Sprintf("%d", ifIndex),
+				"metric", "1")
+
+			debugLog("Executing command: %s", addCmd.String())
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				lastErr = fmt.Errorf("failed to set default route: %v\nOutput: %s", err, string(out))
+				debugLog("Attempt %d: %v", attempt+1, lastErr)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			// Verify the route was set correctly
+			verifyCmd := exec.Command("route", "print", "0.0.0.0")
+			out, err := verifyCmd.CombinedOutput()
+			if err != nil {
+				lastErr = fmt.Errorf("failed to verify route: %v", err)
+				debugLog("Attempt %d: %v", attempt+1, lastErr)
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			// Check if our route is present in the output
+			if strings.Contains(string(out), serverIP) {
+				debugLog("Successfully set and verified default route after %d attempts", attempt+1)
+				return nil
+			}
+
+			lastErr = fmt.Errorf("route verification failed")
+			debugLog("Attempt %d: Route not found in routing table", attempt+1)
+			time.Sleep(retryDelay)
+		}
+
+		return fmt.Errorf("failed to set default route after %d attempts: %v", maxRetries, lastErr)
 	}
 
 	debugLog("Successfully set default route")
@@ -1269,8 +1511,12 @@ func (rm *RouteManager) removeStaticRoute(dst string) error {
 	case "linux":
 		return exec.Command("ip", "route", "del", dst).Run()
 	case "windows":
-		cmd := exec.Command("route", "delete", dst)
-		debugLog("Running command: route delete %s", dst)
+		// Remove CIDR notation for Windows
+		dstIP := strings.Split(dst, "/")[0]
+
+		cmd := exec.Command("route", "delete", dstIP)
+		debugLog("Running command: route delete %s", dstIP)
+
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to remove route: %v\nOutput: %s", err, string(out))
 		}
@@ -1725,73 +1971,4 @@ func updateUDPChecksum(packet []byte) {
 	// Store new UDP checksum
 	packet[26] = byte(checksum >> 8)
 	packet[27] = byte(checksum)
-}
-
-func checkWindowsTAPDriver() error {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-
-	debugLog("Checking for OpenVPN TAP driver...")
-
-	// Check for TAP driver existence in registry
-	cmd := exec.Command("reg", "query",
-		`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\tap0901`,
-		"/v", "DisplayName")
-
-	if err := cmd.Run(); err != nil {
-		debugLog("TAP driver not found, offering to download installer...")
-
-		fmt.Println("\nOpenVPN TAP driver is required but not installed.")
-		fmt.Println("Would you like to download the installer? (y/n)")
-
-		var response string
-		fmt.Scanln(&response)
-
-		if strings.ToLower(response) == "y" {
-			// OpenVPN download URL
-			url := "https://swupdate.openvpn.org/community/releases/OpenVPN-2.5.8-I601-amd64.msi"
-
-			fmt.Printf("Downloading OpenVPN installer from %s...\n", url)
-
-			// Create a temporary file
-			tmpfile, err := os.CreateTemp("", "openvpn-*.msi")
-			if err != nil {
-				return fmt.Errorf("failed to create temporary file: %v", err)
-			}
-			defer os.Remove(tmpfile.Name())
-
-			// Download the file
-			resp, err := http.Get(url)
-			if err != nil {
-				return fmt.Errorf("failed to download installer: %v", err)
-			}
-			defer resp.Body.Close()
-
-			// Copy the response body to the temporary file
-			if _, err := io.Copy(tmpfile, resp.Body); err != nil {
-				return fmt.Errorf("failed to save installer: %v", err)
-			}
-			tmpfile.Close()
-
-			fmt.Printf("\nLaunching installer...\n")
-			fmt.Println("Please complete the installation and then restart this program.")
-
-			// Launch the installer
-			cmd := exec.Command("msiexec", "/i", tmpfile.Name())
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed to run installer: %v", err)
-			}
-
-			// Exit after launching installer
-			os.Exit(0)
-		} else {
-			return fmt.Errorf("TAP driver is required but not installed. Please install OpenVPN: https://openvpn.net/community-downloads/")
-		}
-	}
-
-	debugLog("TAP driver found")
-	return nil
 }
