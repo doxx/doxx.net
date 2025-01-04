@@ -92,7 +92,12 @@ chmod +x ./doxx.net
 Note: For Windows users, the executable can be run directly without additional setup.
 
 ### Windows Setup
-Download and install the [TAP-Windows driver](https://build.openvpn.net/downloads/releases/tap-windows-9.24.2-I601-Win10.exe) (required for creating virtual network interfaces)
+1. Download and install the [Wintun driver](https://www.wintun.net/builds/wintun-0.14.1.zip)
+   - Extract the zip file
+   - Copy the appropriate wintun.dll from the extracted folder:
+     - For 64-bit Windows: Copy `wintun\bin\amd64\wintun.dll`
+     - For 32-bit Windows: Copy `wintun\bin\x86\wintun.dll`
+   - Paste wintun.dll in the same directory as your doxx.net.exe
 
 **Important**: Always run doxx.net with Administrator privileges:
    - Right-click on Command Prompt or PowerShell
