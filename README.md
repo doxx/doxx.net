@@ -63,106 +63,42 @@ wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
 ```
 
 #### Bypassing Blocked Access
-If doxx.net is blocked in your country, you can use Cloudflare's IP addresses directly:
+Simply copy and paste one of these commands to create your account:
 
 ```bash
-# Using curl with Cloudflare IP
-curl -X POST -H "Host: setup.doxx.net" -d "create_account=your.email@example.com" https://104.21.60.147/
+# Americas Edge
+curl -X POST --connect-to setup.doxx.net:443:198.41.214.162 https://setup.doxx.net/ -d "create_account=your.email@example.com"
 
-# Using wget with Cloudflare IP
-wget --header="Host: setup.doxx.net" --post-data "create_account=your.email@example.com" https://172.67.190.239/
+# Europe Edge
+curl -X POST --connect-to setup.doxx.net:443:198.41.215.162 https://setup.doxx.net/ -d "create_account=your.email@example.com"
+
+# Asia Edge
+curl -X POST --connect-to setup.doxx.net:443:198.41.216.162 https://setup.doxx.net/ -d "create_account=your.email@example.com"
 ```
 
-**Why Use Direct IP Access?**
-- DNS blocking is a common censorship technique
-- Direct IP access often works when domains are blocked
-- Cloudflare's IPs are rarely blocked due to widespread use
-- Host headers ensure proper request routing
+**Note**: These edge IPs are stable and globally accessible. No DNS lookup required.
 
-#### Finding Current IPs
-You can find current IPs using the `dig` command:
+### Why Direct IP Access Works
+DNS blocking is a common censorship technique where authorities:
+- Block DNS queries to restricted domains
+- Return incorrect IP addresses
+- Intercept DNS requests entirely
 
-```bash
-dig +short domain.name
-```
+By using direct IP connections through Cloudflare's edge network, we bypass DNS-based restrictions entirely. These IPs are unlikely to be blocked because they host critical services including:
 
-Below are some example domains you can use to test connectivity:
+- Major Banking Platforms (e.g., HSBC, Deutsche Bank)
+- Government Websites
+- Healthcare Services
+- Educational Institutions (.edu domains)
+- Popular CDN-dependent Services:
+  - Discord (discord.com)
+  - Canva (canva.com)
+  - Medium (medium.com)
+  - NPM (npmjs.com)
+  - Zendesk (zendesk.com)
 
-##### Government Websites
-```bash
-# China
-dig +short www.gov.cn
-dig +short www.moe.gov.cn
+Blocking these IPs would cause significant collateral damage to essential services, making them reliable access points even in restricted networks.
 
-# Russia
-dig +short www.gov.ru
-dig +short www.kremlin.ru
-
-# Iran
-dig +short www.dolat.ir
-dig +short www.leader.ir
-
-# UAE
-dig +short www.government.ae
-dig +short www.mohre.gov.ae
-```
-
-##### Major Tech Companies
-```bash
-# China
-dig +short www.baidu.com
-dig +short www.alibaba.com
-
-# Russia
-dig +short www.yandex.ru
-dig +short www.vk.com
-
-# Iran
-dig +short www.digikala.com
-dig +short www.telewebion.com
-
-# UAE
-dig +short www.dubaipolice.gov.ae
-dig +short www.dewa.gov.ae
-```
-
-##### Banking/Business
-```bash
-# China
-dig +short www.icbc.com.cn
-dig +short www.ccb.com
-
-# Russia
-dig +short www.sberbank.ru
-dig +short www.vtb.ru
-
-# Iran
-dig +short www.bmi.ir
-dig +short www.cbi.ir
-
-# UAE
-dig +short www.adcb.com
-dig +short www.emiratesnbd.com
-```
-
-##### Educational Institutions
-```bash
-# China
-dig +short www.tsinghua.edu.cn
-dig +short www.pku.edu.cn
-
-# Russia
-dig +short www.msu.ru
-dig +short www.spbu.ru
-
-# Iran
-dig +short www.ut.ac.ir
-dig +short www.sharif.edu
-
-# UAE
-dig +short www.uaeu.ac.ae
-dig +short www.zu.ac.ae
-```
 
 ### 2. Install the Client
 
@@ -463,3 +399,38 @@ The full text of these licenses and their requirements must be included with any
 
 
 Join us on Discord: https://discord.gg/es546Rt9
+
+### Cloudflare Edge Network Ranges
+
+doxx.net automatically routes traffic through Cloudflare's extensive edge network using the following IP ranges:
+
+```
+173.245.48.0/20
+103.21.244.SNI inhibition
+doxx — Today at 4:27 PM
+Is Host: passed in SNI?0/22
+103.22.200.0/22
+103.31.4.0/22
+141.101.64.0/18
+108.162.192.0/18
+190.93.240.0/20
+188.114.96.0/20
+197.234.240.0/22
+198.41.128.0/17
+162.158.0.0/15
+104.16.0.0/13
+104.24.0.0/14
+172.64.0.0/13
+131.0.72.0/22
+172.67.0.0/16
+104.21.0.0/16
+```
+
+These ranges are automatically configured when using CDN-enabled servers (cdn.*). The VPN client will:
+1. Preserve your original default route for Cloudflare traffic
+2. Route all other traffic through the VPN tunnel
+3. Ensure your connection appears to come from legitimate Cloudflare edge nodes
+
+This configuration helps bypass network restrictions while maintaining the appearance of normal HTTPS traffic through Cloudflare's infrastructure.
+
+**Note**: These ranges are regularly updated by Cloudflare. The client will automatically use the most current ranges.
