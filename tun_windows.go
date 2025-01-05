@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -27,6 +28,15 @@ const (
 
 func createTunDevice(name string) (*TunDevice, error) {
 	debugLog("Checking for existing adapter named: %s", name)
+
+	// Force cleanup of any existing adapters with our name
+	cleanupCmd := exec.Command("netsh", "interface", "delete", "interface", name)
+	if output, err := cleanupCmd.CombinedOutput(); err != nil {
+		debugLog("Cleanup attempt (non-critical): %v\nOutput: %s", err, output)
+	}
+
+	// Wait for cleanup
+	time.Sleep(2 * time.Second)
 
 	// First try to extract embedded DLL
 	dllPath, err := extractEmbeddedWintun()
@@ -167,42 +177,74 @@ func (tun *TunDevice) Read(packet []byte) (int, error) {
 func (tun *TunDevice) Write(packet []byte) (int, error) {
 	size := len(packet)
 
-	// Add basic packet validation
+	// Basic validation
 	if size == 0 {
-		debugLog("[Transport→TUN] Received zero-length packet")
+		debugLog("[Transport→TUN] Skipping zero-length packet")
 		return 0, nil
 	}
 
-	// Add retry logic for buffer allocation with increased timeout
+	// Detailed logging for large packets
+	if size > 1500 {
+		debugLog("[Transport→TUN] Large packet detected: %d bytes", size)
+	}
+
+	// Implement exponential backoff for buffer allocation
 	var buf []byte
 	var err error
-	for retries := 0; retries < 5; retries++ { // Increased retries from 3 to 5
+	maxRetries := 5
+	baseDelay := time.Millisecond * 20
+
+	for retry := 0; retry < maxRetries; retry++ {
 		buf, err = tun.session.AllocateSendPacket(size)
 		if err == nil {
 			break
 		}
-		// Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms
-		waitTime := time.Duration(10*(1<<retries)) * time.Millisecond
-		debugLog("[Transport→TUN] Allocation attempt %d failed: %v, waiting %v", retries+1, err, waitTime)
-		time.Sleep(waitTime)
+
+		// Calculate backoff delay
+		delay := baseDelay * time.Duration(1<<uint(retry))
+		debugLog("[Transport→TUN] Buffer allocation attempt %d failed: %v, waiting %v",
+			retry+1, err, delay)
+
+		// Check for specific error conditions
+		if err == windows.ERROR_BUFFER_OVERFLOW {
+			debugLog("[Transport→TUN] Buffer overflow detected, possible bandwidth issue")
+		}
+
+		time.Sleep(delay)
 	}
 
 	if err != nil {
-		debugLog("[Transport→TUN] Failed to allocate send packet after retries: %v", err)
-		return 0, fmt.Errorf("failed to allocate packet buffer: %v", err)
+		return 0, fmt.Errorf("failed to allocate send buffer after %d retries: %v", maxRetries, err)
 	}
 
+	// Copy packet data to the allocated buffer
 	copy(buf, packet)
 
-	// Add error handling around SendPacket
-	defer func() {
-		if r := recover(); r != nil {
-			debugLog("[Transport→TUN] Panic recovered in SendPacket: %v", r)
-		}
-	}()
+	// Send with recovery for panic conditions
+	success := false
+	for retry := 0; retry < 3 && !success; retry++ {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					debugLog("[Transport→TUN] Recovered from panic in SendPacket: %v", r)
+					err = fmt.Errorf("panic in SendPacket: %v", r)
+				}
+			}()
 
-	tun.session.SendPacket(buf)
-	debugLog("[Transport→TUN] Wrote packet of length %d", size)
+			tun.session.SendPacket(buf)
+			success = true
+			err = nil
+		}()
+
+		if !success {
+			time.Sleep(time.Millisecond * 10)
+		}
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to send packet after retries: %v", err)
+	}
+
 	return size, nil
 }
 
