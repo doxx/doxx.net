@@ -65,6 +65,96 @@ curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
 wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
 ```
 
+If doxx.net is blocked in your country, you can use Cloudflare's IP addresses directly with the appropriate Host header:
+
+```bash
+# Using curl with Cloudflare IP and Host header
+curl -X POST -H "Host: setup.doxx.net" -d "create_account=your.email@example.com" https://104.21.60.147/
+
+# Using wget with Cloudflare IP and Host header
+wget --header="Host: setup.doxx.net" --post-data "create_account=your.email@example.com" https://172.67.190.239/
+```
+
+**Why is this important?**
+- DNS blocking is a common censorship technique
+- When a domain is blocked, direct IP access often still works
+- Cloudflare's IPs are rarely blocked due to their widespread use
+- The Host header ensures the request is properly routed on Cloudflare's network
+
+**Note:** Cloudflare IPs may change. You can find current IPs by:
+```bash
+dig +short host
+```
+
+Replace `host` with the domain you want to access to get the IP address:
+
+# Government websites
+## China
+dig +short www.gov.cn
+dig +short www.moe.gov.cn
+
+## Russia
+dig +short www.gov.ru
+dig +short www.kremlin.ru
+
+## Iran
+dig +short www.dolat.ir
+dig +short www.leader.ir
+
+## UAE
+dig +short www.government.ae
+dig +short www.mohre.gov.ae
+
+# Major tech companies
+## China
+dig +short www.baidu.com
+dig +short www.alibaba.com
+
+## Russia
+dig +short www.yandex.ru
+dig +short www.vk.com
+
+## Iran
+dig +short www.digikala.com
+dig +short www.telewebion.com
+
+## UAE
+dig +short www.dubaipolice.gov.ae
+dig +short www.dewa.gov.ae
+
+# Banking/Business
+## China
+dig +short www.icbc.com.cn
+dig +short www.ccb.com
+
+## Russia
+dig +short www.sberbank.ru
+dig +short www.vtb.ru
+
+## Iran
+dig +short www.bmi.ir
+dig +short www.cbi.ir
+
+## UAE
+dig +short www.adcb.com
+dig +short www.emiratesnbd.com
+
+# Educational institutions
+## China
+dig +short www.tsinghua.edu.cn
+dig +short www.pku.edu.cn
+
+## Russia
+dig +short www.msu.ru
+dig +short www.spbu.ru
+
+## Iran
+dig +short www.ut.ac.ir
+dig +short www.sharif.edu
+
+## UAE
+dig +short www.uaeu.ac.ae
+dig +short www.zu.ac.ae
 
 ### 2. Install the Client
 
