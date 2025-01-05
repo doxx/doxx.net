@@ -28,10 +28,9 @@ Join us on Discord: https://discord.gg/es546Rt9
 
 ## **Key Features**
 
-- **Stealthy Transports:** Camouflage your connections as standard web traffic, evading deep packet inspection and network restrictions.  
+- **Crazy Transports:** Camouflage your connections as standard web traffic, evading deep packet inspection and network restrictions.  
 - **Automatic Routing Management:** Intelligent routing adapts to network conditions, ensuring optimal performance and reliability.  
-- **IPv4 and IPv6 Support:** Comprehensive IP compatibility for seamless connectivity across diverse networks.  
-- **Static IP Assignment:** Maintain consistent IP addresses for stable and predictable connections.  
+- **Static DARKNET IP Assignment:** Maintain consistent IP addresses on the darknet for stable and predictable connections. Doxx.net to the Internet egress IPs are not static.  
 - **Certificate Pinning:** Enhanced security through strict certificate validation, mitigating man-in-the-middle attacks.  
 - **Cross-Platform Compatibility:** Operates smoothly on **Linux**, **macOS**, and **Windows**, catering to a wide range of user environments.  
 - **Cloudflare CDN Integration:** Utilize **Cloudflare's extensive CDN infrastructure** to further obfuscate your traffic, making it indistinguishable from legitimate web requests.  
