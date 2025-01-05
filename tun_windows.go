@@ -26,37 +26,43 @@ const (
 )
 
 func createTunDevice(name string) (*TunDevice, error) {
-	// Get absolute path to executable's directory
-	exe, err := os.Executable()
-	if err != nil {
-		debugLog("Failed to get executable path: %v", err)
-		return nil, err
-	}
-	exePath := filepath.Dir(exe)
-	debugLog("Executable path: %s", exePath)
+	debugLog("Checking for existing adapter named: %s", name)
 
-	// Try both System32 and local paths
+	// First try to extract embedded DLL
+	dllPath, err := extractEmbeddedWintun()
+	if err != nil {
+		debugLog("Failed to extract embedded Wintun DLL: %v", err)
+	} else {
+		debugLog("Successfully extracted Wintun DLL to: %s", dllPath)
+	}
+
+	// Try both System32, embedded/extracted, and local paths
 	dllPaths := []string{
 		`C:\Windows\System32\wintun.dll`,
-		filepath.Join(exePath, "wintun.dll"),
+		dllPath, // Our extracted path
+		filepath.Join(filepath.Dir(dllPath), "wintun.dll"),
 	}
 
 	var handle windows.Handle
 	var loadError error
 
-	for _, dllPath := range dllPaths {
-		debugLog("Trying to load: %s", dllPath)
+	for _, path := range dllPaths {
+		if path == "" {
+			continue
+		}
+
+		debugLog("Trying to load: %s", path)
 
 		// Check if file exists and is readable
-		if _, err := os.Stat(dllPath); err != nil {
+		if _, err := os.Stat(path); err != nil {
 			debugLog("File check failed: %v", err)
 			continue
 		}
 
 		// Try to load using direct Windows API
-		handle, loadError = windows.LoadLibraryEx(dllPath, 0, windows.LOAD_WITH_ALTERED_SEARCH_PATH)
+		handle, loadError = windows.LoadLibraryEx(path, 0, windows.LOAD_WITH_ALTERED_SEARCH_PATH)
 		if handle != 0 {
-			debugLog("Successfully loaded DLL from: %s", dllPath)
+			debugLog("Successfully loaded DLL from: %s", path)
 			break
 		}
 		debugLog("LoadLibrary failed: %v (error code: %d)", loadError, windows.GetLastError())
@@ -73,13 +79,11 @@ func createTunDevice(name string) (*TunDevice, error) {
 		return nil, fmt.Errorf("error creating GUID: %v", err)
 	}
 
-	debugLog("Creating adapter with name: %s", name)
-	adapter, err := wintun.CreateAdapter(name, "Doxx", &guid)
+	debugLog("Creating new adapter named: %s", name)
+	adapter, err := wintun.CreateAdapter(name, "doxx.net", &guid)
 	if err != nil {
-		debugLog("Failed to create adapter: %v (error code: %d)", err, windows.GetLastError())
 		return nil, fmt.Errorf("error creating Wintun adapter: %v", err)
 	}
-	debugLog("Adapter created successfully")
 
 	debugLog("Starting adapter session")
 	session, err := adapter.StartSession(0x2000000) // 32MB ring buffer (increased from 8MB)
