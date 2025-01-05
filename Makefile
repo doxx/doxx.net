@@ -36,14 +36,17 @@ linux-arm64:
 	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-linux-arm64 $(COMMON_SOURCES) tun_other.go
 
 windows-amd64: get-wintun
-	@echo "Building for Windows..."
+	@echo "Building for Windows AMD64..."
 	@mkdir -p $(BINARY_DIR)
 	@mkdir -p assets/windows
-	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
+	@cp assets/windows/wintun-amd64.dll assets/windows/wintun.dll
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net-amd64.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
 
 windows-arm64: get-wintun
+	@echo "Building for Windows ARM64..."
 	@mkdir -p $(BINARY_DIR)
 	@mkdir -p assets/windows
+	@cp assets/windows/wintun-arm64.dll assets/windows/wintun.dll
 	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-arm64.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
 
 mac-amd64:
@@ -60,3 +63,25 @@ mac-universal: mac-amd64 mac-arm64
 		$(BINARY_DIR)/doxx.net-darwin-arm64
 	@echo "Universal binaries created successfully"
 
+get-wintun:
+	@echo "Downloading Wintun $(WINTUN_VERSION)..."
+	@echo "Download URL: $(WINTUN_URL)"
+	@mkdir -p assets/windows
+	@if [ ! -f "assets/windows/wintun-amd64.dll" ] || [ ! -f "assets/windows/wintun-arm64.dll" ]; then \
+		echo "Downloading Wintun..." && \
+		curl -L -o wintun.zip $(WINTUN_URL) && \
+		echo "Verifying checksum..." && \
+		$(SHA256_CHECK) && \
+		echo "Extracting AMD64 version..." && \
+		unzip -j wintun.zip "wintun/bin/amd64/wintun.dll" -d assets/windows/ && \
+		mv assets/windows/wintun.dll assets/windows/wintun-amd64.dll && \
+		echo "Extracting ARM64 version..." && \
+		unzip -j wintun.zip "wintun/bin/arm64/wintun.dll" -d assets/windows/ && \
+		mv assets/windows/wintun.dll assets/windows/wintun-arm64.dll && \
+		rm wintun.zip && \
+		echo "Verifying extracted files:" && \
+		ls -l assets/windows/wintun-*.dll; \
+	else \
+		echo "DLL files already exist:" && \
+		ls -l assets/windows/wintun-*.dll; \
+	fi
