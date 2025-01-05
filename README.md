@@ -75,30 +75,7 @@ curl -X POST --connect-to setup.doxx.net:443:198.41.215.162 https://setup.doxx.n
 # Asia Edge
 curl -X POST --connect-to setup.doxx.net:443:198.41.216.162 https://setup.doxx.net/ -d "create_account=your.email@example.com"
 ```
-
 **Note**: These edge IPs are stable and globally accessible. No DNS lookup required.
-
-### Why Direct IP Access Works
-DNS blocking is a common censorship technique where authorities:
-- Block DNS queries to restricted domains
-- Return incorrect IP addresses
-- Intercept DNS requests entirely
-
-By using direct IP connections through Cloudflare's edge network, we bypass DNS-based restrictions entirely. These IPs are unlikely to be blocked because they host critical services including:
-
-- Major Banking Platforms (e.g., HSBC, Deutsche Bank)
-- Government Websites
-- Healthcare Services
-- Educational Institutions (.edu domains)
-- Popular CDN-dependent Services:
-  - Discord (discord.com)
-  - Canva (canva.com)
-  - Medium (medium.com)
-  - NPM (npmjs.com)
-  - Zendesk (zendesk.com)
-
-Blocking these IPs would cause significant collateral damage to essential services, making them reliable access points even in restricted networks.
-
 
 ### 2. Install the Client
 
@@ -399,38 +376,3 @@ The full text of these licenses and their requirements must be included with any
 
 
 Join us on Discord: https://discord.gg/es546Rt9
-
-### Cloudflare Edge Network Ranges
-
-doxx.net automatically routes traffic through Cloudflare's extensive edge network using the following IP ranges:
-
-```
-173.245.48.0/20
-103.21.244.SNI inhibition
-doxx — Today at 4:27 PM
-Is Host: passed in SNI?0/22
-103.22.200.0/22
-103.31.4.0/22
-141.101.64.0/18
-108.162.192.0/18
-190.93.240.0/20
-188.114.96.0/20
-197.234.240.0/22
-198.41.128.0/17
-162.158.0.0/15
-104.16.0.0/13
-104.24.0.0/14
-172.64.0.0/13
-131.0.72.0/22
-172.67.0.0/16
-104.21.0.0/16
-```
-
-These ranges are automatically configured when using CDN-enabled servers (cdn.*). The VPN client will:
-1. Preserve your original default route for Cloudflare traffic
-2. Route all other traffic through the VPN tunnel
-3. Ensure your connection appears to come from legitimate Cloudflare edge nodes
-
-This configuration helps bypass network restrictions while maintaining the appearance of normal HTTPS traffic through Cloudflare's infrastructure.
-
-**Note**: These ranges are regularly updated by Cloudflare. The client will automatically use the most current ranges.
