@@ -40,121 +40,129 @@ Join us on Discord: https://discord.gg/es546Rt9
 
 ### 1. Create an Account
 
-doxx.net doesn't use usernames or passwords. Instead, you'll receive an authentication token via email. This token is your key to the doxx.net network and is tied to your own ip address in the doxx.net network.
+doxx.net doesn't use usernames or passwords. Instead, you'll receive an authentication token via email. This token is your key to the doxx.net network and is tied to your own IP address in the doxx.net network.
 
-To start using doxx.net, you'll need to create an account. Currently we're not supporting a web interface for creating accounts. You'll need to use the command line to create an account. It's very simple, here's how:
-
-
+#### Standard Account Creation
 ```bash
-# Using curl:
+# Using curl
 curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
 
-# Using wget:
+# Using wget
 wget --post-data "create_account=your.email@example.com" https://setup.doxx.net/
 ```
 
-You'll receive a verification email containing your authentication token.
+#### Reset Token
+If your token is lost or compromised, you can request a new one. The new token will be valid for 15 minutes, and your old token remains valid until you use the new one.
 
-
-NOTE: You can also request a new token if it's been lost or compromised. You will receive a new email with the new token valid for 15 minutes. Your old token will be valid until you have used the new reset token.  
 ```bash
-# Using curl:
+# Using curl
 curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
 
-# Using wget:
+# Using wget
 wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
 ```
 
-If doxx.net is blocked in your country, you can use Cloudflare's IP addresses directly with the appropriate Host header:
+#### Bypassing Blocked Access
+If doxx.net is blocked in your country, you can use Cloudflare's IP addresses directly:
 
 ```bash
-# Using curl with Cloudflare IP and Host header
+# Using curl with Cloudflare IP
 curl -X POST -H "Host: setup.doxx.net" -d "create_account=your.email@example.com" https://104.21.60.147/
 
-# Using wget with Cloudflare IP and Host header
+# Using wget with Cloudflare IP
 wget --header="Host: setup.doxx.net" --post-data "create_account=your.email@example.com" https://172.67.190.239/
 ```
 
-**Why is this important?**
+**Why Use Direct IP Access?**
 - DNS blocking is a common censorship technique
-- When a domain is blocked, direct IP access often still works
-- Cloudflare's IPs are rarely blocked due to their widespread use
-- The Host header ensures the request is properly routed on Cloudflare's network
+- Direct IP access often works when domains are blocked
+- Cloudflare's IPs are rarely blocked due to widespread use
+- Host headers ensure proper request routing
 
-**Note:** Cloudflare IPs may change. You can find current IPs by:
+#### Finding Current IPs
+You can find current IPs using the `dig` command:
+
 ```bash
-dig +short host
+dig +short domain.name
 ```
 
-Replace `host` with the domain you want to access to get the IP address:
+Below are some example domains you can use to test connectivity:
 
-# Government websites
-## China
+##### Government Websites
+```bash
+# China
 dig +short www.gov.cn
 dig +short www.moe.gov.cn
 
-## Russia
+# Russia
 dig +short www.gov.ru
 dig +short www.kremlin.ru
 
-## Iran
+# Iran
 dig +short www.dolat.ir
 dig +short www.leader.ir
 
-## UAE
+# UAE
 dig +short www.government.ae
 dig +short www.mohre.gov.ae
+```
 
-# Major tech companies
-## China
+##### Major Tech Companies
+```bash
+# China
 dig +short www.baidu.com
 dig +short www.alibaba.com
 
-## Russia
+# Russia
 dig +short www.yandex.ru
 dig +short www.vk.com
 
-## Iran
+# Iran
 dig +short www.digikala.com
 dig +short www.telewebion.com
 
-## UAE
+# UAE
 dig +short www.dubaipolice.gov.ae
 dig +short www.dewa.gov.ae
+```
 
-# Banking/Business
-## China
+##### Banking/Business
+```bash
+# China
 dig +short www.icbc.com.cn
 dig +short www.ccb.com
 
-## Russia
+# Russia
 dig +short www.sberbank.ru
 dig +short www.vtb.ru
 
-## Iran
+# Iran
 dig +short www.bmi.ir
 dig +short www.cbi.ir
 
-## UAE
+# UAE
 dig +short www.adcb.com
 dig +short www.emiratesnbd.com
+```
 
-# Educational institutions
-## China
+##### Educational Institutions
+```bash
+# China
 dig +short www.tsinghua.edu.cn
 dig +short www.pku.edu.cn
 
-## Russia
+# Russia
 dig +short www.msu.ru
 dig +short www.spbu.ru
 
-## Iran
+# Iran
 dig +short www.ut.ac.ir
 dig +short www.sharif.edu
 
-## UAE
+# UAE
 dig +short www.uaeu.ac.ae
 dig +short www.zu.ac.ae
+```
 
 ### 2. Install the Client
 
