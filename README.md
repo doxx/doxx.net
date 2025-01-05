@@ -62,7 +62,7 @@ curl -X POST -d "reset_token=your.email@example.com" https://setup.doxx.net/
 wget --post-data "reset_token=your.email@example.com" https://setup.doxx.net/
 ```
 
-#### Bypassing Blocked Access
+#### Bypassing Blocked DNS Access of doxx.net
 Simply copy and paste one of these commands to create your account:
 
 ```bash
@@ -370,9 +370,27 @@ This software includes the following third-party open source software:
 
 - github.com/songgao/water: BSD-3-Clause License
 - github.com/klauspost/compress: BSD-3-Clause License
+- github.com/jackpal/gateway: BSD-3-Clause License
+- github.com/gdamore/tcell/v2: Apache-2.0 License
+- github.com/rivo/tview: MIT License
+- github.com/shirou/gopsutil/v3: BSD-3-Clause License
+- github.com/go-ole/go-ole: MIT License
+- github.com/power-devops/perfstat: MIT License
+- github.com/yusufpapurcu/wmi: MIT License
 - golang.org/x/sys: BSD-3-Clause License
+- golang.org/x/net: BSD-3-Clause License
+- golang.org/x/term: BSD-3-Clause License
+- golang.org/x/text: BSD-3-Clause License
+- golang.zx2c4.com/wintun: MIT License
+- github.com/stretchr/testify: MIT License
 
-The full text of these licenses and their requirements must be included with any distribution of this software.
+The full text of these licenses can be found in the respective repositories:
+
+- BSD-3-Clause License: https://opensource.org/licenses/BSD-3-Clause
+- MIT License: https://opensource.org/licenses/MIT
+- Apache-2.0 License: https://opensource.org/licenses/Apache-2.0
+
+All third-party software components are distributed under their respective licenses. The full text of these licenses and their requirements must be included with any distribution of this software.
 
 
 Join us on Discord: https://discord.gg/es546Rt9
