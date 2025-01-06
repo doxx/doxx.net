@@ -104,36 +104,35 @@ var (
 
 	// Pre-defined locations with lat/long
 	locations = map[string]struct {
-		Lat float64
-		Lon float64
+		Lat      float64
+		Lon      float64
+		Timezone string
+		Locale   string
 	}{
-		"new-york":    {40.7128, -74.0060},
-		"london":      {51.5074, -0.1278},
-		"tokyo":       {35.6762, 139.6503},
-		"paris":       {48.8566, 2.3522},
-		"singapore":   {1.3521, 103.8198},
-		"dubai":       {25.2048, 55.2708},
-		"hong-kong":   {22.3193, 114.1694},
-		"shanghai":    {31.2304, 121.4737},
-		"sydney":      {-33.8688, 151.2093},
-		"miami":       {25.7617, -80.1918},
-		"chicago":     {41.8781, -87.6298},
-		"moscow":      {55.7558, 37.6173},
-		"berlin":      {52.5200, 13.4050},
-		"mumbai":      {19.0760, 72.8777},
-		"sao-paulo":   {-23.5505, -46.6333},
-		"istanbul":    {41.0082, 28.9784},
-		"rome":        {41.9028, 12.4964},
-		"seoul":       {37.5665, 126.9780},
-		"mexico-city": {19.4326, -99.1332},
-		"amsterdam":   {52.3676, 4.9041},
-		"toronto":     {43.6532, -79.3832},
-		"los-angeles": {34.0522, -118.2437},
-		"madrid":      {40.4168, -3.7038},
-		"vienna":      {48.2082, 16.3738},
-		"bangkok":     {13.7563, 100.5018},
-		"beijing":     {39.9042, 116.4074},
-		// ... and so on
+		"new-york":    {40.7128, -74.0060, "America/New_York", "en-US"},
+		"london":      {51.5074, -0.1278, "Europe/London", "en-GB"},
+		"tokyo":       {35.6762, 139.6503, "Asia/Tokyo", "ja-JP"},
+		"paris":       {48.8566, 2.3522, "Europe/Paris", "fr-FR"},
+		"singapore":   {1.3521, 103.8198, "Asia/Singapore", "en-SG"},
+		"dubai":       {25.2048, 55.2708, "Asia/Dubai", "ar-AE"},
+		"hong-kong":   {22.3193, 114.1694, "Asia/Hong_Kong", "zh-HK"},
+		"shanghai":    {31.2304, 121.4737, "Asia/Shanghai", "zh-CN"},
+		"sydney":      {-33.8688, 151.2093, "Australia/Sydney", "en-AU"},
+		"berlin":      {52.5200, 13.4050, "Europe/Berlin", "de-DE"},
+		"moscow":      {55.7558, 37.6173, "Europe/Moscow", "ru-RU"},
+		"mumbai":      {19.0760, 72.8777, "Asia/Kolkata", "hi-IN"},
+		"sao-paulo":   {-23.5505, -46.6333, "America/Sao_Paulo", "pt-BR"},
+		"istanbul":    {41.0082, 28.9784, "Europe/Istanbul", "tr-TR"},
+		"rome":        {41.9028, 12.4964, "Europe/Rome", "it-IT"},
+		"seoul":       {37.5665, 126.9780, "Asia/Seoul", "ko-KR"},
+		"mexico-city": {19.4326, -99.1332, "America/Mexico_City", "es-MX"},
+		"amsterdam":   {52.3676, 4.9041, "Europe/Amsterdam", "nl-NL"},
+		"madrid":      {40.4168, -3.7038, "Europe/Madrid", "es-ES"},
+		"vienna":      {48.2082, 16.3738, "Europe/Vienna", "de-AT"},
+		"bangkok":     {13.7563, 100.5018, "Asia/Bangkok", "th-TH"},
+		"beijing":     {39.9042, 116.4074, "Asia/Shanghai", "zh-CN"},
+		"toronto":     {43.6532, -79.3832, "America/Toronto", "en-CA"},
+		"los-angeles": {34.0522, -118.2437, "America/Los_Angeles", "en-US"},
 	}
 
 	// Add language mappings for locations
@@ -541,39 +540,32 @@ func injectHeaders(req *http.Request, config *Config) {
 
 func injectGeolocationScript(resp *http.Response, config *Config) error {
 	var lat, lon float64
+	var timezone, locale string
+
 	if config.Location == "custom" {
 		lat, lon = config.CustomLat, config.CustomLon
+		timezone = "UTC"
+		locale = "en-US"
 	} else if loc, ok := locations[config.Location]; ok {
 		lat, lon = loc.Lat, loc.Lon
+		timezone = loc.Timezone
+		locale = loc.Locale
 	} else {
 		return nil
 	}
 
-	// Only inject into HTML responses
-	if !strings.Contains(resp.Header.Get("Content-Type"), "html") {
-		return nil
-	}
-
-	// Read the original body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-
-	// Inject our geolocation override script
 	script := fmt.Sprintf(`
 		<script>
 		// Override geolocation API
 		const fakePosition = {
 			coords: {
 				latitude: %f,
-				longitude: %f,
-				accuracy: 10,
-				altitude: null,
-				altitudeAccuracy: null,
-				heading: null,
-				speed: null
+				 longitude: %f,
+				 accuracy: 10,
+				 altitude: null,
+				 altitudeAccuracy: null,
+				 heading: null,
+				 speed: null
 			},
 			timestamp: Date.now()
 		};
@@ -587,6 +579,51 @@ func injectGeolocationScript(resp *http.Response, config *Config) error {
 			return Math.floor(Math.random() * 1000000);
 		};
 
+		// Override timezone and locale
+		const originalDate = Date;
+		Date = class extends originalDate {
+			constructor(...args) {
+				if (args.length === 0) {
+					const date = new originalDate();
+					return new originalDate(date.toLocaleString('en-US', {timeZone: '%s'}));
+				}
+				return new originalDate(...args);
+			}
+		};
+
+		// Override Intl.DateTimeFormat
+		Object.defineProperty(Intl.DateTimeFormat.prototype, 'resolvedOptions', {
+			writable: false,
+			configurable: true,
+			value: function() {
+				return {
+					locale: '%s',
+					calendar: 'gregory',
+					numberingSystem: 'latn',
+					timeZone: '%s',
+					hour12: true,
+					weekday: 'long',
+					era: 'long',
+					year: 'numeric',
+					month: 'numeric',
+					day: 'numeric',
+					hour: 'numeric',
+					minute: 'numeric',
+					second: 'numeric',
+					timeZoneName: 'long'
+				};
+			}
+		});
+
+		// Override language settings
+		Object.defineProperty(navigator, 'language', {
+			get: function() { return '%s'; }
+		});
+
+		Object.defineProperty(navigator, 'languages', {
+			get: function() { return ['%s']; }
+		});
+
 		// Override platform detection
 		Object.defineProperty(navigator, 'platform', {
 			get: function() { return '%s'; }
@@ -596,7 +633,21 @@ func injectGeolocationScript(resp *http.Response, config *Config) error {
 			get: function() { return '%s'; }
 		});
 		</script>
-	`, lat, lon, config.Platform, config.UserAgent)
+	`, lat, lon, timezone, locale, timezone, locale, locale, config.Platform, config.UserAgent)
+
+	// Only inject into HTML responses
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(contentType), "text/html") &&
+		!strings.Contains(strings.ToLower(contentType), "application/xhtml") {
+		return nil
+	}
+
+	// Read the original body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
 
 	// Insert script before </head> or </body>
 	newBody := regexp.MustCompile(`</head>`).ReplaceAll(body,
