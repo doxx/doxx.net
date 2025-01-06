@@ -353,44 +353,47 @@ make windows-amd64
 
 ---
 
-# 🚀 Attional doxx.net toolkit: **Doxxulator**
-
-## 🔥 **What is Doxxulator?**
-Doxxulator isn't your run-of-the-mill proxy server. It's a **high-octane location spoofing and browser emulation engine** designed to obliterate geo-restrictions, circumvent content barriers, and keep your true digital fingerprint under wraps.
-
-Built on **Go** and leveraging **goproxy**, Doxxulator dynamically spoofs browser fingerprints, manipulates HTTP headers, and injects client-side geolocation overrides to trick even the most stubborn streaming platforms.
+// ... existing content ...
 
 ---
 
-## 🛠️ **How Does it Work?**
+# 🛠️ Additional doxx.net Tools
 
-At its core, Doxxulator does three key things:
+## Doxxulator: Advanced Location and Browser Emulation
 
-1. **Geo-Spoofing:**
-   - Choose your location from an extensive list: **Tokyo**, **New York**, **London**, or go rogue with **custom latitude/longitude** coordinates.
-   - Geolocation APIs are intercepted and overridden with fake GPS data.
+Doxxulator is a sophisticated proxy server and emulation engine built on Go, designed to provide advanced location spoofing and browser fingerprint manipulation capabilities.
 
-2. **Browser Fingerprinting:**
-   - Emulate popular browsers (**Chrome**, **Firefox**, **Safari**, **Edge**) with pre-configured User-Agent strings and header manipulation.
-   - Headers like `Accept-Language`, `Sec-CH-UA-Platform`, and `User-Agent` are tailored for maximum realism.
+### Key Features
 
-3. **Certificate Authority (CA) Injection:**
-   - Automatically generates TLS certificates for seamless MITM (Man-In-The-Middle) traffic inspection.
-   - Handles SSL Pinning gracefully by allowing passthrough for services like Slack, Discord, and iCloud.
+1. **Geo-Spoofing**
+   - Choose from preset locations (Tokyo, New York, London) or custom coordinates
+   - Intercept and override geolocation APIs with configurable GPS data
+   - Seamlessly bypass regional restrictions
+
+2. **Browser Fingerprinting**
+   - Emulate major browsers (Chrome, Firefox, Safari, Edge)
+   - Dynamic User-Agent and header manipulation
+   - Realistic platform-specific configurations
+
+3. **Certificate Management**
+   - Automatic TLS certificate generation
+   - MITM traffic inspection capabilities
+   - Intelligent SSL pinning bypass for select services
+
+### Use Cases
+
+#### Streaming Services
+Access region-locked content across platforms:
+- Netflix regional libraries
+- Disney+ exclusive releases
+- Hulu, Prime Video, BBC iPlayer
+
+#### Privacy Enhancement
+- Automatic header sanitization (`User-Agent`, `X-Forwarded-For`)
+- Dynamic metadata spoofing
+- Comprehensive fingerprint masking
 
 ---
-
-## 🌍 **Side-Gate Geo Restrictions Like a Pro**
-
-### 🎥 **Streaming Services**
-Doxxulator bypasses location locks on streaming giants:
-- **Netflix:** Watch region-locked content with geo-coordinates set to anywhere on the planet.
-- **Disney+:** Gain access to exclusive regional releases.
-- **Hulu, Prime Video, BBC iPlayer:** It's game over for geo-blocks.
-
-### 🛡️ **Privacy Mode**
-Your browsing fingerprints are scrubbed clean. Doxxulator removes sensitive headers (`User-Agent`, `X-Forwarded-For`) and injects spoofed metadata seamlessly.
-
 
 ## License
 

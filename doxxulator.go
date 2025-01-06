@@ -235,8 +235,10 @@ func startDoxxulator() {
 
 			// Apple/iCloud domains
 			"gateway.icloud.com",
+			"gsa.apple.com",
 			"icloud.com",
 			"apple.com",
+			".apple.com",
 			"push.apple.com",
 		}
 
