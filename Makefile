@@ -6,6 +6,7 @@ WINDOWS_SOURCES=tun_windows.go embed_windows.go
 WINTUN_VERSION := 0.14.1
 WINTUN_URL := https://www.wintun.net/builds/wintun-$(WINTUN_VERSION).zip
 WINTUN_SHA256 := 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+DOXXULATOR_SOURCE=doxxulator.go
 
 # Detect OS for sha256 command and check format
 UNAME_S := $(shell uname -s)
@@ -23,7 +24,7 @@ endif
 
 .PHONY: all clean install get-wintun
 
-all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 mac-universal
+all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 mac-universal doxxulator-all
 
 clean:
 	rm -rf $(BINARY_DIR)
@@ -85,3 +86,29 @@ get-wintun:
 		echo "DLL files already exist:" && \
 		ls -l assets/windows/wintun-*.dll; \
 	fi
+
+doxxulator-linux-amd64:
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/doxxulator-linux-amd64 $(DOXXULATOR_SOURCE)
+
+doxxulator-linux-arm64:
+	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/doxxulator-linux-arm64 $(DOXXULATOR_SOURCE)
+
+doxxulator-windows-amd64:
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxxulator-amd64.exe $(DOXXULATOR_SOURCE)
+
+doxxulator-windows-arm64:
+	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/doxxulator-arm64.exe $(DOXXULATOR_SOURCE)
+
+doxxulator-mac-amd64:
+	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/doxxulator-darwin-amd64 $(DOXXULATOR_SOURCE)
+
+doxxulator-mac-arm64:
+	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/doxxulator-darwin-arm64 $(DOXXULATOR_SOURCE)
+
+doxxulator-mac-universal: doxxulator-mac-amd64 doxxulator-mac-arm64
+	@echo "Creating universal binaries for doxxulator macOS..."
+	lipo -create -output $(BINARY_DIR)/doxxulator-mac \
+		$(BINARY_DIR)/doxxulator-darwin-amd64 \
+		$(BINARY_DIR)/doxxulator-darwin-arm64
+
+doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 doxxulator-mac-universal

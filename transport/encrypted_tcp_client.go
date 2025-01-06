@@ -40,8 +40,10 @@ package transport
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 // SingleTCPEncryptedClient implements the TransportType interface
@@ -72,9 +74,20 @@ func NewSingleTCPEncryptedClient() (TransportType, error) {
 }
 
 func (t *SingleTCPEncryptedClient) Connect(addr string) error {
-	conn, err := tls.Dial("tcp", addr, t.config)
+	dialer := &net.Dialer{
+		KeepAlive: 30 * time.Second, // Send keepalive every 30 seconds
+		Timeout:   10 * time.Second, // Connection timeout
+	}
+
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, t.config)
 	if err != nil {
 		return err
+	}
+
+	// Enable TCP keepalive at the socket level
+	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
 
 	// Get server certificate fingerprint
