@@ -10,11 +10,17 @@
  
 ```
 
-# **doxx.net (BETA): The Ultimate Stealth VPN and Darknet Service**
+# **doxx.net (BETA): Advanced VPN, Darknet, and Location Spoofing Platform**
 
-**doxx.net** is a high-performance, secure VPN and darknet service engineered for the discerning user or researcher. Leveraging multiple transport protocols—including **TCP**, **encrypted TCP**, and **HTTPS**—doxx.net ensures your traffic seamlessly blends with regular web activity, effectively bypassing restrictive firewalls and censorship.
+**doxx.net** is a comprehensive privacy and security platform that combines a high-performance VPN service with advanced location spoofing capabilities. The platform consists of two main components:
+- **doxx.net Core**: A stealth VPN and darknet service
+- **Doxxulator**: Advanced location and browser emulation engine
 
-Inspired by the ingenuity of **DarkFlare**, doxx.net incorporates advanced techniques to camouflage your IP traffic as HTTPS requests, allowing it to slip through corporate firewalls undetected.
+Together, these components provide a complete solution for:
+- Bypassing network restrictions and censorship
+- Location spoofing and geo-unblocking
+- Browser fingerprint manipulation
+- Secure and private communication
 
 Currently confirmed to bypass censorship in the following countries:
 - 🇨🇳 China
@@ -103,16 +109,6 @@ chmod +x ./doxx.net
 
 Note: For Windows users, the executable can be run directly without additional setup.
 
-### Windows Setup
-**Important**: Always run doxx.net with Administrator privileges:
-   - Right-click on Command Prompt or PowerShell
-   - Select "Run as administrator"
-   - Navigate to the doxx.net directory
-   - Run your doxx.net commands
-
-Note: If you see "Access Denied" errors on Windows, this usually means you need to run the command prompt as Administrator.
-
-
 ### 3. Connect to VPN
 
 Choose one of the following connection methods:
@@ -120,12 +116,26 @@ Choose one of the following connection methods:
 #### TCP Encrypted (Recommended)
 
 ```bash
+# Unix-based systems (Linux/macOS)
 sudo ./doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+
+# Windows (Run Command Prompt as Administrator)
+# For AMD64/x64 systems
+doxx.net-amd64.exe -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+# For ARM64 systems
+doxx.net-arm64.exe -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
 ```
 
 #### HTTPS Mode
 ```bash
+# Unix-based systems (Linux/macOS)
 sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+
+# Windows (Run Command Prompt as Administrator)
+# For AMD64/x64 systems
+doxx.net-amd64.exe -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+# For ARM64 systems
+doxx.net-arm64.exe -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
 ```
 
 
@@ -146,6 +156,109 @@ sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type http
 - cdn.lax.us.doxx.net:443 (Los Angeles)
 - cdn.ams.eu.doxx.net:443 (Amsterdam)
 ---
+
+## Location Spoofing using Doxxulator
+
+The included Doxxulator tool provides powerful location spoofing capabilities through its proxy server. Here's how to use it:
+
+### Basic Usage
+
+```bash
+# Basic usage with preset location
+./doxxulator -location tokyo
+
+# Custom coordinates
+./doxxulator -location custom -lat 35.6762 -lon 139.6503
+```
+
+### Installing your certificates to your OS or browser
+
+#### Certificate Generation
+Doxxulator generates two files in your current working directory:
+- `cert.pem` - The certificate file
+- `key.pem` - The private key file
+
+#### Installing on Different Systems
+
+##### macOS
+```bash
+# Install the certificate
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain cert.pem
+```
+
+##### Linux (Debian/Ubuntu)
+```bash
+# Copy the certificate to the trusted store
+sudo cp cert.pem /usr/local/share/ca-certificates/doxxulator.crt
+sudo update-ca-certificates
+```
+
+##### Windows
+1. Right-click on `cert.pem`
+2. Select "Install Certificate"
+3. Choose "Local Machine"
+4. Select "Place all certificates in the following store"
+5. Click "Browse" and select "Trusted Root Certification Authorities"
+6. Click "Next" and "Finish"
+
+#### Browser-Specific Installation
+
+##### Firefox
+Firefox maintains its own certificate store, so additional steps are required:
+1. Open Firefox Settings
+2. Search for "Certificates"
+3. Click "View Certificates"
+4. Under "Authorities" tab, click "Import"
+5. Select the `cert.pem` file
+6. Check "Trust this CA to identify websites"
+
+#### Verifying Installation
+```bash
+# Test certificate recognition
+curl --cacert cert.pem https://example.com
+```
+
+**Note**: Keep your `key.pem` file secure and private, as it contains the private key used to sign certificates.
+
+### Available Preset Locations
+
+🗽 New York • 🇬🇧 London • 🗼 Tokyo • 🗼 Paris • 🇸🇬 Singapore • 🇦🇪 Dubai • 🇭🇰 Hong Kong • 🇨🇳 Shanghai • 
+🇦🇺 Sydney • 🌴 Miami • 🌆 Chicago • 🇷🇺 Moscow • 🇩🇪 Berlin • 🇮🇳 Mumbai • 🇧🇷 São Paulo • 🇹🇷 Istanbul • 
+🇮🇹 Rome • 🇰🇷 Seoul • 🇲🇽 Mexico City • 🇳🇱 Amsterdam • 🇨🇦 Toronto • 🌴 Los Angeles • 🇪🇸 Madrid • 
+🇦🇹 Vienna • 🇹🇭 Bangkok • 🇨🇳 Beijing
+
+### Browser Configuration
+
+1. **Configure Your Browser**
+   - Set proxy to `127.0.0.1:8080` (default)
+   - For Chrome: Settings → Advanced → System → Proxy settings
+   - For Firefox: Settings → Network Settings → Manual proxy configuration
+
+2. **Choose Browser Profile**
+```bash
+# Emulate different browsers
+./doxxulator -browser chrome    # Default
+./doxxulator -browser firefox
+./doxxulator -browser safari
+./doxxulator -browser edge
+```
+
+### Advanced Features
+
+1. **Certificate Management**
+```bash
+# Generate new certificates (optional - certificates are auto-generated if not present)
+./doxxulator
+
+# Enable certificate passthrough for apps with SSL pinning
+./doxxulator -allow-passthrough -location london
+```
+
+2. **Debug Mode**
+```bash
+# Enable detailed logging
+./doxxulator -log -location paris
+```
 
 ## 🛡️ **What is the Darknet?**
 - The **Darknet** refers to a part of the internet not indexed by traditional search engines (like Google). It relies on **encrypted networks** to enable private communication and anonymous data sharing.
@@ -188,7 +301,7 @@ By default, doxx.net manages all your internet traffic through its VPN tunnel. T
 - You get a new virtual IP address (10.x.x.x)
 - Your original internet connection becomes a backup route
 
-### Using -no-routing
+### doxx.net vpn client with -no-routing
 The `-no-routing` flag gives you manual control over what traffic goes through doxx.net. This is useful when you want to:
 
 1. **Split Tunneling**: Route only specific traffic through the VPN
@@ -350,48 +463,6 @@ Build for specific platform
 make linux-amd64
 make mac-arm64
 make windows-amd64
-
----
-
-// ... existing content ...
-
----
-
-# 🛠️ Additional doxx.net Tools
-
-## Doxxulator: Advanced Location and Browser Emulation
-
-Doxxulator is a sophisticated proxy server and emulation engine built on Go, designed to provide advanced location spoofing and browser fingerprint manipulation capabilities.
-
-### Key Features
-
-1. **Geo-Spoofing**
-   - Choose from preset locations (Tokyo, New York, London) or custom coordinates
-   - Intercept and override geolocation APIs with configurable GPS data
-   - Seamlessly bypass regional restrictions
-
-2. **Browser Fingerprinting**
-   - Emulate major browsers (Chrome, Firefox, Safari, Edge)
-   - Dynamic User-Agent and header manipulation
-   - Realistic platform-specific configurations
-
-3. **Certificate Management**
-   - Automatic TLS certificate generation
-   - MITM traffic inspection capabilities
-   - Intelligent SSL pinning bypass for select services
-
-### Use Cases
-
-#### Streaming Services
-Access region-locked content across platforms:
-- Netflix regional libraries
-- Disney+ exclusive releases
-- Hulu, Prime Video, BBC iPlayer
-
-#### Privacy Enhancement
-- Automatic header sanitization (`User-Agent`, `X-Forwarded-For`)
-- Dynamic metadata spoofing
-- Comprehensive fingerprint masking
 
 ---
 
