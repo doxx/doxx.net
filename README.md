@@ -85,7 +85,7 @@ curl -X POST --connect-to setup.doxx.net:443:198.41.216.162 https://setup.doxx.n
 
 ### 2. Install the Client
 
-1. Download the appropriate binary for your system from the [releases page](https://github.com/yourusername/doxx.net/releases).
+1. Download the appropriate binary for your system from the [releases page](https://github.com/doxx/doxx.net/releases).
 
 2. Create a symbolic link based on your system architecture:
 
@@ -260,6 +260,8 @@ curl --cacert cert.pem https://example.com
 ./doxxulator -log -location paris
 ```
 
+---
+
 ## 🛡️ **What is the Darknet?**
 - The **Darknet** refers to a part of the internet not indexed by traditional search engines (like Google). It relies on **encrypted networks** to enable private communication and anonymous data sharing.
 - It’s often misunderstood as being purely for illegal activities. In reality, it plays a **critical role in privacy, whistleblowing, bypassing censorship, and ensuring secure communication** in restrictive regions.
@@ -268,8 +270,6 @@ curl --cacert cert.pem https://example.com
 - **Freedom of Speech:** Allows individuals to share information without fear of government persecution.
 - **Bypassing Censorship:** Access information in countries with restricted internet.
 - **Privacy Protection:** Securely communicate and share data without tracking.
-
----
 
 ## 🌐 **What is doxx.net?**
 doxx.net is **a VPN-based darknet network designed to pierce through firewalls, avoid detection, and provide a new layer of internet freedom**. Think of it as a **virtual second internet** that operates on top of the traditional web.
@@ -379,41 +379,6 @@ ip route add x.x.x.x via 10.1.0.100
 **4. Server and -type missmatch:**  
 - For https and cdn you must use -type https and for tcp-encrypted servers use -type tcp-encrypted.
 
-
-## Advanced Configuration
-
-### Transport Types
-- `tcp-encrypted`: Encrypted TCP with TLS
-- `https`: HTTPS transport with compression
-
-### Command Line Flags
-```
-Usage of ./bin/doxx.net-darwin-arm64:
-  -debug
-    	enable debug logging
-  -kill
-    	Remove default route instead of saving it
-  -no-routing
-    	Disable automatic routing
-  -proxy string
-    	Proxy URL (e.g., http://user:pass@host:port, https://user:pass@host:port, or socks5://user:pass@host:port)
-  -server string
-    	VPN server address (host:port)
-  -token string
-    	Authentication token
-  -type string
-    	Transport type (tcp-encrypted, or https) (default "tcp-encrypted")
-  -snarf-dns
-    Enables DNS query interception and tunneling through the VPN. When enabled:
-    - All DNS queries are automatically redirected through the VPN tunnel
-    - Prevents DNS leaks to your local network or ISP
-    - Ensures DNS queries are encrypted within the VPN tunnel
-    - Maintains the appearance of original DNS servers (e.g., 8.8.8.8) while routing through VPN
-    - Helps bypass DNS-based geo-restrictions and censorship
-    - Improves privacy by hiding DNS queries from network observers
-    - Default: false (DNS queries use system default routing)
-
-```
 
 ## Technical Details
 
