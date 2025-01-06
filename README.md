@@ -293,6 +293,8 @@ Internet censorship is a significant issue in many countries, where governments 
 AP NEWS
  In such environments, a tool that tunnels TCP traffic over HTTP(S) through a Content Delivery Network (CDN) like Cloudflare can be invaluable. By disguising restricted traffic as regular web traffic, this method can effectively circumvent censorship measures, granting users access to blocked content and preserving the free flow of information.
 
+---
+
 ## Understanding Routing
 
 ### Default Routing Behavior
