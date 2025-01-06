@@ -351,17 +351,18 @@ make linux-amd64
 make mac-arm64
 make windows-amd64
 
+---
 
-### 🚀 Attional doxx.net toolkit: **Doxxulator**
+# 🚀 Attional doxx.net toolkit: **Doxxulator**
 
-#### 🔥 **What is Doxxulator?**
+## 🔥 **What is Doxxulator?**
 Doxxulator isn't your run-of-the-mill proxy server. It's a **high-octane location spoofing and browser emulation engine** designed to obliterate geo-restrictions, circumvent content barriers, and keep your true digital fingerprint under wraps.
 
 Built on **Go** and leveraging **goproxy**, Doxxulator dynamically spoofs browser fingerprints, manipulates HTTP headers, and injects client-side geolocation overrides to trick even the most stubborn streaming platforms.
 
 ---
 
-### 🛠️ **How Does it Work?**
+## 🛠️ **How Does it Work?**
 
 At its core, Doxxulator does three key things:
 
@@ -379,15 +380,15 @@ At its core, Doxxulator does three key things:
 
 ---
 
-### 🌍 **Side-Gate Geo Restrictions Like a Pro**
+## 🌍 **Side-Gate Geo Restrictions Like a Pro**
 
-#### 🎥 **Streaming Services**
+### 🎥 **Streaming Services**
 Doxxulator bypasses location locks on streaming giants:
 - **Netflix:** Watch region-locked content with geo-coordinates set to anywhere on the planet.
 - **Disney+:** Gain access to exclusive regional releases.
 - **Hulu, Prime Video, BBC iPlayer:** It's game over for geo-blocks.
 
-#### 🛡️ **Privacy Mode**
+### 🛡️ **Privacy Mode**
 Your browsing fingerprints are scrubbed clean. Doxxulator removes sensitive headers (`User-Agent`, `X-Forwarded-For`) and injects spoofed metadata seamlessly.
 
 
