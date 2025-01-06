@@ -108,6 +108,30 @@ var (
 		"beijing":     {39.9042, 116.4074},
 		// ... and so on
 	}
+
+	// Add language mappings for locations
+	locationLanguages = map[string]string{
+		"new-york":    "en-US,en;q=0.9",
+		"london":      "en-GB,en;q=0.9",
+		"tokyo":       "ja-JP,ja;q=0.9,en;q=0.8",
+		"paris":       "fr-FR,fr;q=0.9,en;q=0.8",
+		"singapore":   "en-SG,en;q=0.9,zh-SG;q=0.8",
+		"dubai":       "ar-AE,ar;q=0.9,en;q=0.8",
+		"hong-kong":   "zh-HK,zh;q=0.9,en;q=0.8",
+		"shanghai":    "zh-CN,zh;q=0.9,en;q=0.8",
+		"sydney":      "en-AU,en;q=0.9",
+		"berlin":      "de-DE,de;q=0.9,en;q=0.8",
+		"moscow":      "ru-RU,ru;q=0.9,en;q=0.8",
+		"mumbai":      "hi-IN,hi;q=0.9,en;q=0.8",
+		"sao-paulo":   "pt-BR,pt;q=0.9,en;q=0.8",
+		"istanbul":    "tr-TR,tr;q=0.9,en;q=0.8",
+		"rome":        "it-IT,it;q=0.9,en;q=0.8",
+		"seoul":       "ko-KR,ko;q=0.9,en;q=0.8",
+		"mexico-city": "es-MX,es;q=0.9,en;q=0.8",
+		"amsterdam":   "nl-NL,nl;q=0.9,en;q=0.8",
+		"madrid":      "es-ES,es;q=0.9,en;q=0.8",
+		// Default to en-US for any unlisted locations
+	}
 )
 
 func startDoxxulator() {
@@ -452,7 +476,15 @@ func stripPrivacyHeaders(req *http.Request) {
 func injectHeaders(req *http.Request, config *Config) {
 	// Browser fingerprinting headers
 	req.Header.Set("User-Agent", config.UserAgent)
-	req.Header.Set("Accept-Language", config.AcceptLang)
+
+	// Set Accept-Language based on location
+	if lang, ok := locationLanguages[config.Location]; ok {
+		req.Header.Set("Accept-Language", lang)
+	} else {
+		// Fall back to the browser profile's default language
+		req.Header.Set("Accept-Language", config.AcceptLang)
+	}
+
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	req.Header.Set("Sec-CH-UA-Platform", config.Platform)
