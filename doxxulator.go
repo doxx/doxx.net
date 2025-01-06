@@ -12,6 +12,11 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 //
+// USAGE RESTRICTION:
+// This software is designed for exclusive use with the doxx.net VPN service.
+// Use with other VPN providers (including but not limited to NordVPN, ExpressVPN,
+// ProtonVPN, or similar services) is strictly prohibited.
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -219,9 +224,13 @@ func startDoxxulator() {
 			".cursor.sh",
 			"cursor.sh",
 
+			// Google stuff
+			".googleapis.com",
+
 			// Discord domains
 			".discord.com",
 			"discord.com",
+			"media.discordapp.net",
 			"gateway.discord.gg",
 
 			// Apple/iCloud domains
