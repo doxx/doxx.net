@@ -90,8 +90,10 @@ ln -s ./bin/doxx.net-mac ./doxx.net
 # Linux (AMD64 or x86_64)
 ln -s ./bin/doxx.net-linux-amd64 ./doxx.net
 
-# Windows (x86_64)
-No symlink needed - use doxx.net.exe directly
+# Windows (x86_64 or ARM64)
+Depending on your OS architecture, use the following:
+doxx.net-amd64.exe 
+doxx.net-arm64.exe 
 ```
 
 3. Make the binary executable (Unix-based systems only):
@@ -102,13 +104,6 @@ chmod +x ./doxx.net
 Note: For Windows users, the executable can be run directly without additional setup.
 
 ### Windows Setup
-1. Download and install the [Wintun driver](https://www.wintun.net/builds/wintun-0.14.1.zip)
-   - Extract the zip file
-   - Copy the appropriate wintun.dll from the extracted folder:
-     - For 64-bit Windows: Copy `wintun\bin\amd64\wintun.dll`
-     - For 32-bit Windows: Copy `wintun\bin\x86\wintun.dll`
-   - Paste wintun.dll in the same directory as your doxx.net.exe
-
 **Important**: Always run doxx.net with Administrator privileges:
    - Right-click on Command Prompt or PowerShell
    - Select "Run as administrator"
