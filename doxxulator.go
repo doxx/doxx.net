@@ -43,7 +43,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,69 +112,231 @@ var (
 		Timezone string
 		Locale   string
 	}{
-		"new-york":    {40.7128, -74.0060, "America/New_York", "en-US"},
-		"london":      {51.5074, -0.1278, "Europe/London", "en-GB"},
-		"tokyo":       {35.6762, 139.6503, "Asia/Tokyo", "ja-JP"},
-		"paris":       {48.8566, 2.3522, "Europe/Paris", "fr-FR"},
-		"singapore":   {1.3521, 103.8198, "Asia/Singapore", "en-SG"},
-		"dubai":       {25.2048, 55.2708, "Asia/Dubai", "ar-AE"},
-		"hong-kong":   {22.3193, 114.1694, "Asia/Hong_Kong", "zh-HK"},
-		"shanghai":    {31.2304, 121.4737, "Asia/Shanghai", "zh-CN"},
-		"sydney":      {-33.8688, 151.2093, "Australia/Sydney", "en-AU"},
-		"berlin":      {52.5200, 13.4050, "Europe/Berlin", "de-DE"},
-		"moscow":      {55.7558, 37.6173, "Europe/Moscow", "ru-RU"},
-		"mumbai":      {19.0760, 72.8777, "Asia/Kolkata", "hi-IN"},
-		"sao-paulo":   {-23.5505, -46.6333, "America/Sao_Paulo", "pt-BR"},
-		"istanbul":    {41.0082, 28.9784, "Europe/Istanbul", "tr-TR"},
-		"rome":        {41.9028, 12.4964, "Europe/Rome", "it-IT"},
-		"seoul":       {37.5665, 126.9780, "Asia/Seoul", "ko-KR"},
-		"mexico-city": {19.4326, -99.1332, "America/Mexico_City", "es-MX"},
-		"amsterdam":   {52.3676, 4.9041, "Europe/Amsterdam", "nl-NL"},
-		"madrid":      {40.4168, -3.7038, "Europe/Madrid", "es-ES"},
-		"vienna":      {48.2082, 16.3738, "Europe/Vienna", "de-AT"},
-		"bangkok":     {13.7563, 100.5018, "Asia/Bangkok", "th-TH"},
-		"beijing":     {39.9042, 116.4074, "Asia/Shanghai", "zh-CN"},
-		"toronto":     {43.6532, -79.3832, "America/Toronto", "en-CA"},
-		"los-angeles": {34.0522, -118.2437, "America/Los_Angeles", "en-US"},
+		"newyork-us":      {40.7128, -74.0060, "America/New_York", "en-US"},
+		"london-gb":       {51.5074, -0.1278, "Europe/London", "en-GB"},
+		"tokyo-jp":        {35.6762, 139.6503, "Asia/Tokyo", "ja-JP"},
+		"paris-fr":        {48.8566, 2.3522, "Europe/Paris", "fr-FR"},
+		"singapore-sg":    {1.3521, 103.8198, "Asia/Singapore", "en-SG"},
+		"dubai-ae":        {25.2048, 55.2708, "Asia/Dubai", "ar-AE"},
+		"hongkong-hk":     {22.3193, 114.1694, "Asia/Hong_Kong", "zh-HK"},
+		"shanghai-cn":     {31.2304, 121.4737, "Asia/Shanghai", "zh-CN"},
+		"sydney-au":       {-33.8688, 151.2093, "Australia/Sydney", "en-AU"},
+		"berlin-de":       {52.5200, 13.4050, "Europe/Berlin", "de-DE"},
+		"moscow-ru":       {55.7558, 37.6173, "Europe/Moscow", "ru-RU"},
+		"mumbai-in":       {19.0760, 72.8777, "Asia/Kolkata", "hi-IN"},
+		"saopaulo-br":     {-23.5505, -46.6333, "America/Sao_Paulo", "pt-BR"},
+		"istanbul-tr":     {41.0082, 28.9784, "Europe/Istanbul", "tr-TR"},
+		"rome-it":         {41.9028, 12.4964, "Europe/Rome", "it-IT"},
+		"seoul-kr":        {37.5665, 126.9780, "Asia/Seoul", "ko-KR"},
+		"mexicocity-mx":   {19.4326, -99.1332, "America/Mexico_City", "es-MX"},
+		"amsterdam-nl":    {52.3676, 4.9041, "Europe/Amsterdam", "nl-NL"},
+		"madrid-es":       {40.4168, -3.7038, "Europe/Madrid", "es-ES"},
+		"vienna-at":       {48.2082, 16.3738, "Europe/Vienna", "de-AT"},
+		"bangkok-th":      {13.7563, 100.5018, "Asia/Bangkok", "th-TH"},
+		"beijing-cn":      {39.9042, 116.4074, "Asia/Shanghai", "zh-CN"},
+		"toronto-ca":      {43.6532, -79.3832, "America/Toronto", "en-CA"},
+		"losangeles-us":   {34.0522, -118.2437, "America/Los_Angeles", "en-US"},
+		"chicago-us":      {41.8781, -87.6298, "America/Chicago", "en-US"},
+		"houston-us":      {29.7604, -95.3698, "America/Chicago", "en-US"},
+		"phoenix-us":      {33.4484, -112.0740, "America/Phoenix", "en-US"},
+		"philadelphia-us": {39.9526, -75.1652, "America/New_York", "en-US"},
+		"sanantonio-us":   {29.4241, -98.4936, "America/Chicago", "en-US"},
+		"sandiego-us":     {32.7157, -117.1611, "America/Los_Angeles", "en-US"},
+		"dallas-us":       {32.7767, -96.7970, "America/Chicago", "en-US"},
+		"sanjose-us":      {37.3382, -121.8863, "America/Los_Angeles", "en-US"},
+		"austin-us":       {30.2672, -97.7431, "America/Chicago", "en-US"},
+		"jacksonville-us": {30.3322, -81.6557, "America/New_York", "en-US"},
+		"fortworth-us":    {32.7555, -97.3308, "America/Chicago", "en-US"},
+		"columbus-us":     {39.9612, -82.9988, "America/New_York", "en-US"},
+		"miami-us":        {25.7617, -80.1918, "America/New_York", "en-US"},
+		"charlotte-us":    {35.2271, -80.8431, "America/New_York", "en-US"},
 	}
 
 	// Add language mappings for locations
 	locationLanguages = map[string]string{
-		"new-york":    "en-US,en;q=0.9",
-		"london":      "en-GB,en;q=0.9",
-		"tokyo":       "ja-JP,ja;q=0.9,en;q=0.8",
-		"paris":       "fr-FR,fr;q=0.9,en;q=0.8",
-		"singapore":   "en-SG,en;q=0.9,zh-SG;q=0.8",
-		"dubai":       "ar-AE,ar;q=0.9,en;q=0.8",
-		"hong-kong":   "zh-HK,zh;q=0.9,en;q=0.8",
-		"shanghai":    "zh-CN,zh;q=0.9,en;q=0.8",
-		"sydney":      "en-AU,en;q=0.9",
-		"berlin":      "de-DE,de;q=0.9,en;q=0.8",
-		"moscow":      "ru-RU,ru;q=0.9,en;q=0.8",
-		"mumbai":      "hi-IN,hi;q=0.9,en;q=0.8",
-		"sao-paulo":   "pt-BR,pt;q=0.9,en;q=0.8",
-		"istanbul":    "tr-TR,tr;q=0.9,en;q=0.8",
-		"rome":        "it-IT,it;q=0.9,en;q=0.8",
-		"seoul":       "ko-KR,ko;q=0.9,en;q=0.8",
-		"mexico-city": "es-MX,es;q=0.9,en;q=0.8",
-		"amsterdam":   "nl-NL,nl;q=0.9,en;q=0.8",
-		"madrid":      "es-ES,es;q=0.9,en;q=0.8",
+		"newyork-us":      "en-US,en;q=0.9",
+		"london-gb":       "en-GB,en;q=0.9",
+		"tokyo-jp":        "ja-JP,ja;q=0.9,en;q=0.8",
+		"paris-fr":        "fr-FR,fr;q=0.9,en;q=0.8",
+		"singapore-sg":    "en-SG,en;q=0.9,zh-SG;q=0.8",
+		"dubai-ae":        "ar-AE,ar;q=0.9,en;q=0.8",
+		"hongkong-hk":     "zh-HK,zh;q=0.9,en;q=0.8",
+		"shanghai-cn":     "zh-CN,zh;q=0.9,en;q=0.8",
+		"sydney-au":       "en-AU,en;q=0.9",
+		"berlin-de":       "de-DE,de;q=0.9,en;q=0.8",
+		"moscow-ru":       "ru-RU,ru;q=0.9,en;q=0.8",
+		"mumbai-in":       "hi-IN,hi;q=0.9,en;q=0.8",
+		"saopaulo-br":     "pt-BR,pt;q=0.9,en;q=0.8",
+		"istanbul-tr":     "tr-TR,tr;q=0.9,en;q=0.8",
+		"rome-it":         "it-IT,it;q=0.9,en;q=0.8",
+		"seoul-kr":        "ko-KR,ko;q=0.9,en;q=0.8",
+		"mexicocity-mx":   "es-MX,es;q=0.9,en;q=0.8",
+		"amsterdam-nl":    "nl-NL,nl;q=0.9,en;q=0.8",
+		"madrid-es":       "es-ES,es;q=0.9,en;q=0.8",
+		"chicago-us":      "en-US,en;q=0.9",
+		"houston-us":      "en-US,en;q=0.9,es;q=0.8",
+		"phoenix-us":      "en-US,en;q=0.9,es;q=0.8",
+		"philadelphia-us": "en-US,en;q=0.9",
+		"sanantonio-us":   "en-US,en;q=0.9,es;q=0.8",
+		"sandiego-us":     "en-US,en;q=0.9,es;q=0.8",
+		"dallas-us":       "en-US,en;q=0.9,es;q=0.8",
+		"sanjose-us":      "en-US,en;q=0.9,es;q=0.8",
+		"austin-us":       "en-US,en;q=0.9,es;q=0.8",
+		"jacksonville-us": "en-US,en;q=0.9",
+		"fortworth-us":    "en-US,en;q=0.9,es;q=0.8",
+		"columbus-us":     "en-US,en;q=0.9",
+		"miami-us":        "en-US,en;q=0.9,es;q=0.8",
+		"charlotte-us":    "en-US,en;q=0.9",
 		// Default to en-US for any unlisted locations
 	}
 )
 
+func getDoxxNetDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %v", err)
+	}
+
+	doxxDir := filepath.Join(homeDir, ".doxx.net")
+	if err := os.MkdirAll(doxxDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create .doxx.net directory: %v", err)
+	}
+
+	return doxxDir, nil
+}
+
+func initializeCertificates(config *Config) error {
+	doxxDir, err := getDoxxNetDir()
+	if err != nil {
+		return err
+	}
+
+	config.CertPath = filepath.Join(doxxDir, "doxxulator-ca.crt")
+	config.KeyPath = filepath.Join(doxxDir, "doxxulator-ca.key")
+
+	// Check if certificates exist
+	if _, err := os.Stat(config.CertPath); os.IsNotExist(err) {
+		log.Println("🔑 Generating new root CA certificate...")
+		if err := generateCertificates(config); err != nil {
+			return err
+		}
+
+		// Attempt to install the certificate
+		if err := installCertificate(config.CertPath); err != nil {
+			// Print manual installation instructions if automatic install fails
+			printManualInstallInstructions(config.CertPath)
+		}
+	}
+
+	// Set proper permissions
+	if err := os.Chmod(config.KeyPath, 0600); err != nil {
+		return fmt.Errorf("failed to set permissions on private key: %v", err)
+	}
+	if err := os.Chmod(config.CertPath, 0644); err != nil {
+		return fmt.Errorf("failed to set permissions on certificate: %v", err)
+	}
+
+	return nil
+}
+
+func installCertificate(certPath string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", certPath)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install certificate on macOS: %v", err)
+		}
+
+	case "linux":
+		if _, err := exec.LookPath("update-ca-certificates"); err == nil {
+			// Debian/Ubuntu
+			destPath := "/usr/local/share/ca-certificates/doxxulator-ca.crt"
+			if err := copyFile(certPath, destPath); err != nil {
+				return err
+			}
+			cmd := exec.Command("update-ca-certificates")
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to update certificates on Linux: %v", err)
+			}
+		} else if _, err := exec.LookPath("update-ca-trust"); err == nil {
+			// RHEL/CentOS
+			destPath := "/etc/pki/ca-trust/source/anchors/doxxulator-ca.crt"
+			if err := copyFile(certPath, destPath); err != nil {
+				return err
+			}
+			cmd := exec.Command("update-ca-trust", "extract")
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to update certificates on Linux: %v", err)
+			}
+		}
+
+	case "windows":
+		cmd := exec.Command("certutil", "-addstore", "ROOT", certPath)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install certificate on Windows: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
+}
+
+func printManualInstallInstructions(certPath string) {
+	fmt.Printf("\n📝 Manual Certificate Installation Instructions:\n\n")
+
+	switch runtime.GOOS {
+	case "darwin":
+		fmt.Printf("macOS Instructions:\n"+
+			"1. Double click the certificate file: %s\n"+
+			"2. Open Keychain Access\n"+
+			"3. Add the certificate to System keychain\n"+
+			"4. Trust the certificate for SSL/TLS\n", certPath)
+
+	case "windows":
+		fmt.Printf("Windows Instructions:\n"+
+			"1. Right-click the certificate file: %s\n"+
+			"2. Select 'Install Certificate'\n"+
+			"3. Select 'Local Machine'\n"+
+			"4. Place certificate in 'Trusted Root Certification Authorities'\n", certPath)
+
+	default:
+		fmt.Printf("Browser Instructions:\n"+
+			"1. Open your browser settings\n"+
+			"2. Go to Security/Privacy > Certificates\n"+
+			"3. Import the certificate file: %s\n"+
+			"4. Trust the certificate for identifying websites\n", certPath)
+	}
+
+	fmt.Printf("\nCertificate location: %s\n\n", certPath)
+}
+
 func startDoxxulator() {
 	config := parseFlags()
+
+	if err := initializeCertificates(config); err != nil {
+		log.Fatalf("❌ Failed to initialize certificates: %v", err)
+	}
 
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = config.Debug
 
-	// First ensure certificates exist
-	if err := ensureCertificates(config); err != nil {
-		log.Fatalf("❌ Failed to generate certificates: %v", err)
-	}
-
-	// Now load the certificates (which we know exist)
+	// Load the certificates (which we know exist)
 	rootCert, err := tls.LoadX509KeyPair(config.CertPath, config.KeyPath)
 	if err != nil {
 		log.Fatalf("❌ Failed to load certificates: %v", err)
@@ -218,6 +383,7 @@ func startDoxxulator() {
 			".slack.com", // This will catch all Slack subdomains
 			"edgeapi.slack.com",
 			"wss-backup.slack.com",
+			".slackb.com",
 
 			// Discord domains
 			".cursor.sh",
@@ -229,6 +395,7 @@ func startDoxxulator() {
 			// Discord domains
 			".discord.com",
 			"discord.com",
+			".discordapp.net",
 			"media.discordapp.net",
 			"gateway.discord.gg",
 
@@ -360,15 +527,12 @@ func parseFlags() *Config {
 	// Update flag descriptions
 	flag.StringVar(&config.ListenAddr, "l", "127.0.0.1:8080", "Listen address")
 	flag.StringVar(&config.Browser, "browser", "chrome", "Browser to emulate (chrome, firefox, safari, edge)")
-	flag.StringVar(&config.Location, "location", "new-york", locationsHelp)
-	flag.StringVar(&config.CertPath, "cert", "cert.pem", "Path to certificate file")
-	flag.StringVar(&config.KeyPath, "key", "key.pem", "Path to private key file")
+	flag.StringVar(&config.Location, "location", "newyork-us", locationsHelp)
 	flag.BoolVar(&config.Debug, "log", false, "Enable request logging")
 	flag.Float64Var(&config.CustomLat, "lat", 0, "Custom latitude (required when using -location=custom)")
 	flag.Float64Var(&config.CustomLon, "lon", 0, "Custom longitude (required when using -location=custom)")
 	flag.BoolVar(&config.AllowPassthrough, "allow-passthrough", false,
-		"Allow certificate passthrough for apps with SSL pinning (e.g., Slack, Discord). "+
-			"This bypasses MITM for these apps but allows them to connect.")
+		"Allow certificate passthrough for apps with SSL pinning (e.g., Slack, Discord)")
 
 	// Custom usage message
 	flag.Usage = func() {
@@ -709,15 +873,16 @@ func generateHostCertificate(hostname string, caCert tls.Certificate) (*tls.Cert
 }
 
 func verifyDoxxNetwork() error {
-	// First check TUN interface
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return fmt.Errorf("failed to get network interfaces: %v", err)
-	}
+	switch runtime.GOOS {
+	case "windows":
+		// Windows-specific VPN interface check
+		interfaces, err := net.Interfaces()
+		if err != nil {
+			return fmt.Errorf("failed to get network interfaces: %v", err)
+		}
 
-	hasTunInterface := false
-	for _, iface := range interfaces {
-		if strings.Contains(strings.ToLower(iface.Name), "tun") {
+		hasVPNInterface := false
+		for _, iface := range interfaces {
 			addrs, err := iface.Addrs()
 			if err != nil {
 				continue
@@ -726,18 +891,47 @@ func verifyDoxxNetwork() error {
 			for _, addr := range addrs {
 				ipStr := addr.String()
 				if strings.HasPrefix(ipStr, "10.") {
-					hasTunInterface = true
+					hasVPNInterface = true
 					break
 				}
 			}
 		}
+
+		if !hasVPNInterface {
+			return fmt.Errorf("no VPN interface found with 10.x.x.x address. Please check your VPN connection")
+		}
+
+	default:
+		// Unix-like systems (Linux, macOS) - check for TUN interface
+		interfaces, err := net.Interfaces()
+		if err != nil {
+			return fmt.Errorf("failed to get network interfaces: %v", err)
+		}
+
+		hasTunInterface := false
+		for _, iface := range interfaces {
+			if strings.Contains(strings.ToLower(iface.Name), "tun") {
+				addrs, err := iface.Addrs()
+				if err != nil {
+					continue
+				}
+
+				for _, addr := range addrs {
+					ipStr := addr.String()
+					if strings.HasPrefix(ipStr, "10.") {
+						hasTunInterface = true
+						break
+					}
+				}
+			}
+		}
+
+		if !hasTunInterface {
+			return fmt.Errorf("no TUN interface found with 10.x.x.x address. Please check your VPN connection")
+		}
 	}
 
-	if !hasTunInterface {
-		return fmt.Errorf("no TUN interface found with 10.x.x.x address. Please check your VPN connection")
-	}
-
-	// Then perform the existing doxx.net verification
+	// Verify doxx.net connectivity for all platforms
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}

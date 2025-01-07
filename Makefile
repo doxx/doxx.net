@@ -15,16 +15,18 @@ ifeq ($(UNAME_S),Darwin)
     SHA256_CHECK := echo "Expected hash: $(WINTUN_SHA256)" && \
                    echo "Actual hash: $$(shasum -a 256 wintun.zip | cut -d' ' -f1)" && \
                    echo "$(WINTUN_SHA256)  wintun.zip" | shasum -a 256 -c
+    MAC_BUILD := mac-universal
 else
     SHA256_CMD := sha256sum
     SHA256_CHECK := echo "Expected hash: $(WINTUN_SHA256)" && \
                    echo "Actual hash: $$(sha256sum wintun.zip | cut -d' ' -f1)" && \
                    echo "$(WINTUN_SHA256) wintun.zip" | sha256sum -c
+    MAC_BUILD := mac-amd64 mac-arm64
 endif
 
 .PHONY: all clean install get-wintun
 
-all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 mac-universal doxxulator-all
+all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) doxxulator-all
 
 clean:
 	rm -rf $(BINARY_DIR)
@@ -111,4 +113,4 @@ doxxulator-mac-universal: doxxulator-mac-amd64 doxxulator-mac-arm64
 		$(BINARY_DIR)/doxxulator-darwin-amd64 \
 		$(BINARY_DIR)/doxxulator-darwin-arm64
 
-doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 doxxulator-mac-universal
+doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 $(MAC_BUILD)

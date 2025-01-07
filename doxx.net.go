@@ -81,7 +81,7 @@ const (
 
 var (
 	debug                 bool
-	snarfDNS              bool
+	snarfDNS              = true // Changed to default true
 	bandwidthDisplayReady = make(chan struct{})
 	dnsNatTable           *DNSNatTable
 )
@@ -606,18 +606,28 @@ func hexDump(data []byte) string {
 
 func main() {
 	var (
-		serverAddr string
-		token      string
-		vpnType    string
-		noRouting  bool
-		killRoute  bool
-		proxyURL   string
-		keepSSH    bool
-		bandwidth  bool
+		serverAddr  string
+		token       string
+		vpnType     string
+		noRouting   bool
+		killRoute   bool
+		proxyURL    string
+		keepSSH     bool
+		noSnarfDNS  bool
+		noBandwidth bool
 	)
 
 	// Print ASCII logo before flag parsing
 	fmt.Print(ASCII_LOGO)
+
+	// Add configuration check right after ASCII logo
+	allConfigured, _ := checkCAandDNSConfig()
+	if !allConfigured {
+		if err := setupCAandDNS(); err != nil {
+			log.Printf("Warning: Configuration setup failed: %v", err)
+			// Continue anyway as the VPN can still work
+		}
+	}
 
 	flag.StringVar(&serverAddr, "server", "", "VPN server address (host:port)")
 	flag.StringVar(&token, "token", "", "Authentication token")
@@ -626,8 +636,8 @@ func main() {
 	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
 	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port)")
 	flag.BoolVar(&keepSSH, "keep-established-ssh", false, "Maintain existing SSH connections")
-	flag.BoolVar(&bandwidth, "bandwidth", false, "Show bandwidth statistics")
-	flag.BoolVar(&snarfDNS, "snarf-dns", false, "Snarf DNS traffic")
+	flag.BoolVar(&noSnarfDNS, "no-snarf-dns", false, "Disable DNS traffic snarfing")
+	flag.BoolVar(&noBandwidth, "no-bandwidth", false, "Disable bandwidth statistics")
 	flag.Parse()
 
 	if debug {
@@ -807,7 +817,7 @@ func main() {
 
 	// Create bandwidth stats if enabled
 	var bandwidthStats *BandwidthStats
-	if bandwidth {
+	if !noBandwidth {
 		bandwidthStats = NewBandwidthStats()
 
 		// Wait for geo information to be displayed before starting bandwidth
@@ -839,7 +849,7 @@ func main() {
 
 	// Initialize DNS NAT table if DNS snarfing is enabled
 	// Add this BEFORE starting the goroutines
-	if snarfDNS {
+	if !noSnarfDNS {
 		debugLog("Initializing DNS NAT table")
 		dnsNatTable = NewDNSNatTable()
 		if dnsNatTable == nil {
@@ -898,7 +908,7 @@ func main() {
 				packetCopy := make([]byte, n)
 				copy(packetCopy, packet[:n])
 
-				if snarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+				if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
 					if debug {
 						debugLog("Processing DNS packet")
 					}
@@ -965,7 +975,7 @@ func main() {
 				packetCopy := make([]byte, len(packet))
 				copy(packetCopy, packet)
 
-				if snarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+				if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
 					if debug {
 						debugLog("Processing DNS packet from transport")
 					}
@@ -1971,4 +1981,211 @@ func updateUDPChecksum(packet []byte) {
 	// Store new UDP checksum
 	packet[26] = byte(checksum >> 8)
 	packet[27] = byte(checksum)
+}
+
+func checkCAandDNSConfig() (bool, map[string]bool) {
+	status := make(map[string]bool)
+
+	fmt.Println("\nChecking Doxx.net configuration...")
+	fmt.Println("────────────────────────────")
+
+	// Check CA certificate installation
+	switch runtime.GOOS {
+	case "darwin":
+		// Check system trust store
+		cmd := exec.Command("security", "find-certificate", "-c", "Doxx.net Root CA", "/Library/Keychains/System.keychain")
+		status["ca_system"] = cmd.Run() == nil
+
+		// Check curl certificates
+		_, err := os.Stat("/etc/ssl/certs/doxx-root-ca.crt")
+		status["ca_curl"] = err == nil
+
+		// Check .doxx resolver configuration
+		content, err := os.ReadFile("/etc/resolver/doxx")
+		if err == nil {
+			expected := "nameserver 8.8.8.8\ndomain doxx\nsearch doxx\noptions ndots:0"
+			status["resolver"] = string(content) == expected
+		}
+
+	case "linux":
+		// Check system certificates
+		_, err := os.Stat("/etc/ssl/certs/doxx-root-ca.crt")
+		status["ca_system"] = err == nil
+
+		// Check if cert is in the hash directory
+		hashCmd := exec.Command("sh", "-c", "ls /etc/ssl/certs | grep -i doxx")
+		status["ca_hash"] = hashCmd.Run() == nil
+
+	case "windows":
+		// Check Windows certificate store
+		cmd := exec.Command("certutil", "-store", "root", "Doxx.net Root CA")
+		status["ca_system"] = cmd.Run() == nil
+	}
+
+	// Print status
+	fmt.Println("Configuration Status:")
+	allConfigured := true
+
+	switch runtime.GOOS {
+	case "darwin":
+		if status["ca_system"] {
+			fmt.Println("✓ Root CA installed in system trust store")
+		} else {
+			fmt.Println("✗ Root CA not found in system trust store")
+			allConfigured = false
+		}
+
+		if status["ca_curl"] {
+			fmt.Println("✓ Root CA installed for curl")
+		} else {
+			fmt.Println("✗ Root CA not configured for curl")
+			allConfigured = false
+		}
+
+		if status["resolver"] {
+			fmt.Println("✓ .doxx domain resolver configured")
+		} else {
+			fmt.Println("✗ .doxx domain resolver not configured")
+			allConfigured = false
+		}
+
+	case "linux":
+		if status["ca_system"] {
+			fmt.Println("✓ Root CA installed in system certificates")
+		} else {
+			fmt.Println("✗ Root CA not found in system certificates")
+			allConfigured = false
+		}
+
+		if status["ca_hash"] {
+			fmt.Println("✓ Root CA hash links created")
+		} else {
+			fmt.Println("✗ Root CA hash links not found")
+			allConfigured = false
+		}
+
+	case "windows":
+		if status["ca_system"] {
+			fmt.Println("✓ Root CA installed in Windows certificate store")
+		} else {
+			fmt.Println("✗ Root CA not found in Windows certificate store")
+			allConfigured = false
+		}
+	}
+
+	return allConfigured, status
+}
+
+func setupCAandDNS() error {
+	// First check current configuration
+	allConfigured, status := checkCAandDNSConfig()
+
+	if allConfigured {
+		fmt.Println("\n✓ All Doxx.net components are properly configured!")
+		fmt.Println("No additional setup needed.")
+		return nil
+	}
+
+	fmt.Println("\nDoxx.net Root CA Installation")
+	fmt.Println("────────────────────────────")
+	fmt.Println("The Doxx.net Root CA enables secure communication with .doxx domains and")
+	fmt.Println("allows users to register their own domains without relying on the public PKI system.")
+	fmt.Println("This is essential for maintaining privacy and security within the Doxx.net network.")
+	fmt.Println("\nDNS Configuration:")
+	fmt.Println("When connected to Doxx.net, DNS queries are automatically secured through our network.")
+	fmt.Println("We recommend using 1.1.1.1 and 8.8.8.8 as your default DNS servers.")
+	fmt.Println("The Doxx client will automatically redirect DNS traffic to secure Doxx.net servers")
+	fmt.Println("while connected, and restore your original DNS settings when disconnected.")
+
+	fmt.Print("\nWould you like to proceed with installation of missing components? (y/n): ")
+	var response string
+	fmt.Scanln(&response)
+	if strings.ToLower(response) != "y" {
+		return fmt.Errorf("installation cancelled by user")
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		if !status["ca_system"] || !status["ca_curl"] {
+			// Install CA certificate for curl if needed
+			if !status["ca_curl"] {
+				fmt.Println("Installing Root CA for curl...")
+				if err := exec.Command("sudo", "mkdir", "-p", "/etc/ssl/certs").Run(); err != nil {
+					return fmt.Errorf("failed to create cert directory: %v", err)
+				}
+				if err := exec.Command("sudo", "cp", "assets/doxx-root-ca.crt", "/etc/ssl/certs/").Run(); err != nil {
+					return fmt.Errorf("failed to copy CA cert: %v", err)
+				}
+			}
+
+			// Install CA certificate to system trust if needed
+			if !status["ca_system"] {
+				fmt.Println("Adding Root CA to system trust store...")
+				if err := exec.Command("sudo", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
+					"-k", "/Library/Keychains/System.keychain", "assets/doxx-root-ca.crt").Run(); err != nil {
+					return fmt.Errorf("failed to add CA cert to system trust: %v", err)
+				}
+			}
+		}
+
+		// Configure .doxx resolver if needed
+		if !status["resolver"] {
+			fmt.Println("Configuring .doxx domain resolver...")
+			if err := os.MkdirAll("/etc/resolver", 0755); err != nil {
+				return fmt.Errorf("failed to create resolver directory: %v", err)
+			}
+
+			resolverContent := []byte("nameserver 8.8.8.8\ndomain doxx\nsearch doxx\noptions ndots:0")
+			if err := os.WriteFile("/etc/resolver/doxx", resolverContent, 0644); err != nil {
+				return fmt.Errorf("failed to create resolver configuration: %v", err)
+			}
+
+			// Restart mDNSResponder
+			if err := exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run(); err != nil {
+				fmt.Println("Warning: Failed to restart mDNSResponder. You may need to restart your system.")
+			}
+		}
+
+	case "linux":
+		if !status["ca_system"] {
+			fmt.Println("Installing Root CA...")
+			if err := exec.Command("sudo", "mkdir", "-p", "/etc/ssl/certs").Run(); err != nil {
+				return fmt.Errorf("failed to create cert directory: %v", err)
+			}
+			if err := exec.Command("sudo", "cp", "assets/doxx-root-ca.crt", "/etc/ssl/certs/").Run(); err != nil {
+				return fmt.Errorf("failed to copy CA cert: %v", err)
+			}
+			if err := exec.Command("sudo", "update-ca-certificates").Run(); err != nil {
+				return fmt.Errorf("failed to update CA certificates: %v", err)
+			}
+		}
+
+	case "windows":
+		if !status["ca_system"] {
+			fmt.Println("\nTo install the Doxx.net Root CA on Windows:")
+			fmt.Println("1. Double-click the 'assets/doxx-root-ca.crt' file")
+			fmt.Println("2. Click 'Install Certificate'")
+			fmt.Println("3. Select 'Local Machine' and click 'Next'")
+			fmt.Println("4. Select 'Place all certificates in the following store'")
+			fmt.Println("5. Click 'Browse' and select 'Trusted Root Certification Authorities'")
+			fmt.Println("6. Click 'Next' and then 'Finish'")
+			fmt.Println("\nAlternatively, run this command as Administrator:")
+			fmt.Println("certutil -addstore root assets\\doxx-root-ca.crt")
+		}
+	}
+
+	// Verify configuration after installation
+	allConfigured, _ = checkCAandDNSConfig()
+	if allConfigured {
+		fmt.Println("\n✓ Installation completed successfully!")
+		fmt.Println("Your system is now configured to use Doxx.net secure DNS services.")
+		fmt.Println("Default DNS servers (recommended):")
+		fmt.Println("  Primary:   1.1.1.1    (Cloudflare)")
+		fmt.Println("  Secondary: 8.8.8.8    (Google)")
+	} else {
+		fmt.Println("\n⚠ Some components may not have installed correctly.")
+		fmt.Println("Please check the status messages above.")
+	}
+
+	return nil
 }
