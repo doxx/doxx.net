@@ -56,6 +56,8 @@ curl -X POST -d "create_account=your.email@example.com" https://setup.doxx.net/
 # Using wget
 wget --post-data "create_account=your.email@example.com" https://setup.doxx.net/
 ```
+#### Did not receive the email?
+If you did not receive the email, please check your spam folder or join Discord for support. You can also try to request a new token seen below:
 
 #### Reset Token
 If your token is lost or compromised, you can request a new one. The new token will be valid for 15 minutes, and your old token remains valid until you use the new one.
