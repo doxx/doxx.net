@@ -2131,16 +2131,21 @@ func setupCAandDNS() error {
 		// Configure .doxx resolver if needed
 		if !status["resolver"] {
 			fmt.Println("Configuring .doxx domain resolver...")
-			if err := os.MkdirAll("/etc/resolver", 0755); err != nil {
+			if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err != nil {
 				return fmt.Errorf("failed to create resolver directory: %v", err)
 			}
 
-			resolverContent := []byte("nameserver 8.8.8.8\ndomain doxx\nsearch doxx\noptions ndots:0")
-			if err := os.WriteFile("/etc/resolver/doxx", resolverContent, 0644); err != nil {
+			// Updated resolver content with correct format
+			resolverContent := []byte("nameserver 8.8.8.8\ndomain doxx\nsearch_order 1\ntimeout 5")
+			if err := exec.Command("sudo", "tee", "/etc/resolver/doxx").Input(bytes.NewReader(resolverContent)).Run(); err != nil {
 				return fmt.Errorf("failed to create resolver configuration: %v", err)
 			}
 
-			// Restart mDNSResponder
+			// Flush DNS cache and restart mDNSResponder
+			fmt.Println("Updating DNS configuration...")
+			if err := exec.Command("sudo", "dscacheutil", "-flushcache").Run(); err != nil {
+				fmt.Println("Warning: Failed to flush DNS cache")
+			}
 			if err := exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run(); err != nil {
 				fmt.Println("Warning: Failed to restart mDNSResponder. You may need to restart your system.")
 			}

@@ -119,25 +119,25 @@ Choose one of the following connection methods:
 
 ```bash
 # Unix-based systems (Linux/macOS)
-sudo ./doxx.net -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+sudo ./doxx.net -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
 
 # Windows (Run Command Prompt as Administrator)
 # For AMD64/x64 systems
-doxx.net-amd64.exe -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+doxx.net-amd64.exe -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
 # For ARM64 systems
-doxx.net-arm64.exe -server tcp-encrypted.miami.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+doxx.net-arm64.exe -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
 ```
 
 #### HTTPS Mode
 ```bash
 # Unix-based systems (Linux/macOS)
-sudo ./doxx.net -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+sudo ./doxx.net -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type https
 
 # Windows (Run Command Prompt as Administrator)
 # For AMD64/x64 systems
-doxx.net-amd64.exe -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+doxx.net-amd64.exe -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type https
 # For ARM64 systems
-doxx.net-arm64.exe -server https.miami.us.doxx.net:443 -token YOUR_TOKEN -type https
+doxx.net-arm64.exe -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type https
 ```
 
 
