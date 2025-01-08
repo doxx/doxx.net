@@ -2077,7 +2077,7 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 }
 
 func setupCAandDNS() error {
-	// First check current configuration
+	// Get the status without printing it again
 	allConfigured, status := checkCAandDNSConfig()
 
 	if allConfigured {
@@ -2131,14 +2131,36 @@ func setupCAandDNS() error {
 		// Configure .doxx resolver if needed
 		if !status["resolver"] {
 			fmt.Println("Configuring .doxx domain resolver...")
+
+			// Create resolver directory if it doesn't exist
 			if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err != nil {
 				return fmt.Errorf("failed to create resolver directory: %v", err)
 			}
 
-			// Updated resolver content with correct format
-			resolverContent := []byte("nameserver 8.8.8.8\ndomain doxx\nsearch_order 1\ntimeout 5")
-			if err := exec.Command("sudo", "tee", "/etc/resolver/doxx").Input(bytes.NewReader(resolverContent)).Run(); err != nil {
-				return fmt.Errorf("failed to create resolver configuration: %v", err)
+			// Create temporary file with resolver content
+			resolverContent := []byte("nameserver 8.8.8.8\ndomain doxx\nsearch doxx\noptions ndots:0")
+			tmpfile, err := os.CreateTemp("", "resolver")
+			if err != nil {
+				return fmt.Errorf("failed to create temporary file: %v", err)
+			}
+			defer os.Remove(tmpfile.Name())
+
+			// Write content to temporary file
+			if _, err := tmpfile.Write(resolverContent); err != nil {
+				return fmt.Errorf("failed to write resolver content: %v", err)
+			}
+			if err := tmpfile.Close(); err != nil {
+				return fmt.Errorf("failed to close temporary file: %v", err)
+			}
+
+			// Copy file to destination using sudo
+			if err := exec.Command("sudo", "cp", tmpfile.Name(), "/etc/resolver/doxx").Run(); err != nil {
+				return fmt.Errorf("failed to copy resolver configuration: %v", err)
+			}
+
+			// Set proper permissions
+			if err := exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run(); err != nil {
+				fmt.Println("Warning: Failed to set resolver file permissions")
 			}
 
 			// Flush DNS cache and restart mDNSResponder

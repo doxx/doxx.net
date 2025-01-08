@@ -26,7 +26,7 @@ endif
 
 .PHONY: all clean install get-wintun
 
-all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) doxxulator-all
+all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) doxxulator-all doxxulator-mac-universal
 
 clean:
 	rm -rf $(BINARY_DIR)
