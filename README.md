@@ -180,48 +180,6 @@ Doxxulator automatically generates and stores two files in your home directory u
 - `~/.doxx.net/doxxulator-ca.crt` - The certificate file
 - `~/.doxx.net/doxxulator-ca.key` - The private key file
 
-#### Installing on Different Systems
-
-##### macOS
-```bash
-# Install the certificate
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain cert.pem
-```
-
-##### Linux (Debian/Ubuntu)
-```bash
-# Copy the certificate to the trusted store
-sudo cp cert.pem /usr/local/share/ca-certificates/doxxulator.crt
-sudo update-ca-certificates
-```
-
-##### Windows
-1. Right-click on `cert.pem`
-2. Select "Install Certificate"
-3. Choose "Local Machine"
-4. Select "Place all certificates in the following store"
-5. Click "Browse" and select "Trusted Root Certification Authorities"
-6. Click "Next" and "Finish"
-
-#### Browser-Specific Installation
-
-##### Firefox
-Firefox maintains its own certificate store, so additional steps are required:
-1. Open Firefox Settings
-2. Search for "Certificates"
-3. Click "View Certificates"
-4. Under "Authorities" tab, click "Import"
-5. Select the `cert.pem` file
-6. Check "Trust this CA to identify websites"
-
-#### Verifying Installation
-```bash
-# Test certificate recognition
-curl --cacert cert.pem https://example.com
-```
-
-**Note**: Keep your `key.pem` file secure and private, as it contains the private key used to sign certificates.
-
 ### Available Preset Locations
 
 🗽 New York • 🇬🇧 London • 🗼 Tokyo • 🗼 Paris • 🇸🇬 Singapore • 🇦🇪 Dubai • 🇭🇰 Hong Kong • 🇨🇳 Shanghai • 
@@ -261,6 +219,210 @@ curl --cacert cert.pem https://example.com
 # Enable detailed logging
 ./doxxulator -log -location paris
 ```
+---
+
+# doxx.net setup API Reference
+
+## https://setup.doxx.net/
+This is the API backend for managing user accounts, domains, DNS records, and certificate signing for the `doxx.net` platform. 
+
+## Authentication
+All API endpoints (except account creation and token reset) require a valid authentication token passed via the `token` parameter.
+
+## Endpoints
+
+### Create Account
+Creates a new doxx.net account and assigns a unique IP address.
+
+```bash
+# Create new account
+curl -X POST https://setup.doxx.net/ \
+  -d "create_account=your.email@example.com"
+```
+
+### Reset Token
+Generate a new authentication token. The old token remains valid until the new one is used.
+
+```bash
+# Reset authentication token
+curl -X POST https://setup.doxx.net/ \
+  -d "reset_token=your.email@example.com"
+```
+
+### Create Domain
+Register a new .doxx domain and set up default DNS records.
+
+```bash
+# Register new domain
+curl -X POST https://setup.doxx.net/ \
+  -d "token=YOUR_TOKEN" \
+  -d "domain=example.doxx" \
+  -d "create_domain=1"
+```
+
+### Create DNS Record
+Add a new DNS record to an existing domain.
+
+```bash
+# Add DNS record
+curl -X POST https://setup.doxx.net/ \
+  -d "token=YOUR_TOKEN" \
+  -d "domain=example.doxx" \
+  -d "name=subdomain.example.doxx" \
+  -d "type=A" \
+  -d "content=192.0.2.1" \
+  -d "create_dns_record=1"
+
+# Example: Add MX record
+curl -X POST https://setup.doxx.net/ \
+  -d "token=YOUR_TOKEN" \
+  -d "domain=example.doxx" \
+  -d "name=example.doxx" \
+  -d "type=MX" \
+  -d "content=mail.example.doxx." \
+  -d "prio=10" \
+  -d "create_dns_record=1"
+```
+
+Supported record types:
+- `A`: IPv4 address
+- `CNAME`: Canonical name
+- `MX`: Mail exchange
+- `TXT`: Text record
+
+### Delete Domain
+Remove a domain and all its associated DNS records.
+
+```bash
+# Delete domain
+curl -X POST https://setup.doxx.net/ \
+  -d "token=YOUR_TOKEN" \
+  -d "domain=example.doxx" \
+  -d "delete_domain=1"
+```
+
+### Delete DNS Record
+Remove a specific DNS record from a domain.
+
+```bash
+# Delete DNS record
+curl -X POST https://setup.doxx.net/ \
+  -d "token=YOUR_TOKEN" \
+  -d "domain=example.doxx" \
+  -d "name=subdomain.example.doxx" \
+  -d "type=A" \
+  -d "content=192.0.2.1" \
+  -d "delete_dns_record=1"
+```
+
+### Sign Certificate
+Sign a Certificate Signing Request (CSR) for your domain.
+
+```bash
+# Sign CSR
+curl -X POST https://setup.doxx.net/ \
+  -d "token=YOUR_TOKEN" \
+  -d "domain=example.doxx" \
+  -d "csr=$(cat domain.csr | tr -d '\n')" \
+  -d "sign_certificate=1"
+```
+
+Note: The CSR must be properly formatted and contain the correct domain name.
+
+---
+
+// ... existing content ...
+
+## Certificate Management Guide
+
+### 1. Generate a Private Key
+First, register a domain and generate a private key for your domain:
+
+```bash
+# Generate a 2048-bit RSA private key
+openssl genrsa -out domain.key 2048
+
+# Or for better security, generate a 4096-bit key
+openssl genrsa -out domain.key 4096
+```
+
+### 2. Create a Certificate Signing Request (CSR)
+Generate a CSR using your private key:
+
+```bash
+# Basic CSR
+openssl req -new -key domain.key -out domain.csr
+
+# Or non-interactive with predefined details
+openssl req -new -key domain.key -out domain.csr \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=example.doxx"
+```
+
+### 3. Sign the Certificate
+Submit your CSR to the doxx.net API:
+
+```bash
+# Sign the certificate
+curl -X POST https://setup.doxx.net/ \
+    -d "token=YOUR_TOKEN" \
+    -d "domain=example.doxx" \
+    -d "csr=$(cat domain.csr | tr -d '\n')" \
+    -d "sign_certificate=1" \
+    > domain.crt
+
+# Verify the certificate
+openssl x509 -in domain.crt -text -noout
+```
+
+### 4. Create Full Chain (Optional)
+If you need to combine your certificate with intermediates:
+
+```bash
+# Combine certificate with intermediate certificates
+cat domain.crt intermediate.crt > fullchain.crt
+```
+
+### Complete Example
+Here's a full script that handles the entire process:
+
+```bash
+#!/bin/bash
+
+# Configuration
+DOMAIN="example.doxx"
+TOKEN="YOUR_TOKEN"
+
+# 1. Generate private key
+openssl genrsa -out "${DOMAIN}.key" 2048
+
+# 2. Create CSR
+openssl req -new -key "${DOMAIN}.key" -out "${DOMAIN}.csr" \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=${DOMAIN}"
+
+# 3. Submit CSR and get certificate
+curl -X POST https://setup.doxx.net/ \
+    -d "token=${TOKEN}" \
+    -d "domain=${DOMAIN}" \
+    -d "csr=$(cat ${DOMAIN}.csr | tr -d '\n')" \
+    -d "sign_certificate=1" \
+    > "${DOMAIN}.crt"
+
+# 4. Verify certificate
+openssl x509 -in "${DOMAIN}.crt" -text -noout
+
+echo "Certificate generation complete for ${DOMAIN}"
+```
+
+### Security Best Practices
+- Keep your private key secure and never share it
+- Use at least 2048-bit RSA keys (4096-bit recommended)
+- Store certificates and keys with appropriate permissions:
+  ```bash
+  chmod 600 domain.key
+  chmod 644 domain.crt
+  ```
+- Regularly rotate certificates (recommended every 90 days)
+- Back up your private keys securely
 
 ---
 
