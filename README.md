@@ -235,53 +235,32 @@ All API endpoints (except account creation and token reset) require a valid auth
 Creates a new doxx.net account and assigns a unique IP address.
 
 ```bash
-# Create new account
-curl -X POST https://setup.doxx.net/ \
-  -d "create_account=your.email@example.com"
+curl -X POST https://setup.doxx.net/ -d "create_account=your.email@example.com"
 ```
 
 ### Reset Token
 Generate a new authentication token. The old token remains valid until the new one is used.
 
 ```bash
-# Reset authentication token
-curl -X POST https://setup.doxx.net/ \
-  -d "reset_token=your.email@example.com"
+curl -X POST https://setup.doxx.net/ -d "reset_token=your.email@example.com"
 ```
 
 ### Create Domain
 Register a new .doxx domain and set up default DNS records.
 
 ```bash
-# Register new domain
-curl -X POST https://setup.doxx.net/ \
-  -d "token=YOUR_TOKEN" \
-  -d "domain=example.doxx" \
-  -d "create_domain=1"
+curl -X POST https://setup.doxx.net/ -d "token=YOUR_TOKEN" -d "domain=example.doxx" -d "create_domain=1"
 ```
 
 ### Create DNS Record
 Add a new DNS record to an existing domain.
 
 ```bash
-# Add DNS record
-curl -X POST https://setup.doxx.net/ \
-  -d "token=YOUR_TOKEN" \
-  -d "domain=example.doxx" \
-  -d "name=subdomain.example.doxx" \
-  -d "type=A" \
-  -d "content=192.0.2.1" \
-  -d "create_dns_record=1"
+# Add A Record
+curl -X POST https://setup.doxx.net/ -d "token=YOUR_TOKEN" -d "domain=example.doxx" -d "name=subdomain.example.doxx" -d "type=A" -d "content=192.0.2.1" -d "create_dns_record=1"
 
-# Example: Add MX record
-curl -X POST https://setup.doxx.net/ \
-  -d "token=YOUR_TOKEN" \
-  -d "domain=example.doxx" \
-  -d "name=example.doxx" \
-  -d "type=MX" \
-  -d "content=mail.example.doxx." \
-  -d "prio=10" \
-  -d "create_dns_record=1"
+# Add MX Record
+curl -X POST https://setup.doxx.net/ -d "token=YOUR_TOKEN" -d "domain=example.doxx" -d "name=example.doxx" -d "type=MX" -d "content=mail.example.doxx." -d "prio=10" -d "create_dns_record=1"
 ```
 
 Supported record types:
@@ -294,40 +273,24 @@ Supported record types:
 Remove a domain and all its associated DNS records.
 
 ```bash
-# Delete domain
-curl -X POST https://setup.doxx.net/ \
-  -d "token=YOUR_TOKEN" \
-  -d "domain=example.doxx" \
-  -d "delete_domain=1"
+curl -X POST https://setup.doxx.net/ -d "token=YOUR_TOKEN" -d "domain=example.doxx" -d "delete_domain=1"
 ```
 
 ### Delete DNS Record
 Remove a specific DNS record from a domain.
 
 ```bash
-# Delete DNS record
-curl -X POST https://setup.doxx.net/ \
-  -d "token=YOUR_TOKEN" \
-  -d "domain=example.doxx" \
-  -d "name=subdomain.example.doxx" \
-  -d "type=A" \
-  -d "content=192.0.2.1" \
-  -d "delete_dns_record=1"
+curl -X POST https://setup.doxx.net/ -d "token=YOUR_TOKEN" -d "domain=example.doxx" -d "name=subdomain.example.doxx" -d "type=A" -d "content=192.0.2.1" -d "delete_dns_record=1"
 ```
 
 ### Sign Certificate
 Sign a Certificate Signing Request (CSR) for your domain.
 
 ```bash
-# Sign CSR
-curl -X POST https://setup.doxx.net/ \
-  -d "token=YOUR_TOKEN" \
-  -d "domain=example.doxx" \
-  -d "csr=$(cat domain.csr | tr -d '\n')" \
-  -d "sign_certificate=1"
+curl -X POST https://setup.doxx.net/ -d "token=YOUR_TOKEN" -d "domain=example.doxx" -d "csr=%CERT_CONTENT%" -d "sign_certificate=1"
 ```
 
-Note: The CSR must be properly formatted and contain the correct domain name.
+Note: For the certificate signing, replace %CERT_CONTENT% with the actual CSR content after removing newlines.
 
 ---
 
