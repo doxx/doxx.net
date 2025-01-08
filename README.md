@@ -6,7 +6,7 @@
     /_______  \____/ /__/\_  /\__/|___|  /\____/|__|  
             \_/           \_/         \_/               
 
-     [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
+     [ Copyright (c) Barrett Lyon 2024-2025 - https://doxx.net ]
  
 ```
 
