@@ -396,15 +396,6 @@ echo "Certificate generation complete for ${DOMAIN}"
 
 ---
 
-## 🛡️ **What is the Darknet?**
-- The **Darknet** refers to a part of the internet not indexed by traditional search engines (like Google). It relies on **encrypted networks** to enable private communication and anonymous data sharing.
-- It’s often misunderstood as being purely for illegal activities. In reality, it plays a **critical role in privacy, whistleblowing, bypassing censorship, and ensuring secure communication** in restrictive regions.
-
-### **Why is the Darknet Important?**
-- **Freedom of Speech:** Allows individuals to share information without fear of government persecution.
-- **Bypassing Censorship:** Access information in countries with restricted internet.
-- **Privacy Protection:** Securely communicate and share data without tracking.
-
 ## 🌐 **Understanding the Parallel Internet**
 
 A parallel internet represents a revolutionary approach to network infrastructure - one that operates alongside the traditional internet rather than within it. Unlike the conventional internet or darknets, which operate within existing infrastructure, a parallel internet creates its own complete ecosystem with independent DNS systems, private IP addressing, and custom domain resolution.
