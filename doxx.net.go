@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 doxx.net
+ * Copyright (c) 2024-2025 doxx.net
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -74,8 +74,8 @@ const (
     /_______  \____/ /__/\_  /\__/|___|  /\____/|__|  
             \_/           \_/         \_/               
                         
-     [ Copyright (c) Barrett Lyon 2024 - https://doxx.net ]
-     [ Secure Networking for Humans                       ]
+     [ Copyright (c) Barrett Lyon 2024-2025 - https://doxx.net ]
+     [ Secure Networking for Humans                            ]
 `
 )
 
@@ -2008,7 +2008,7 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 		// Check .doxx resolver configuration
 		content, err := os.ReadFile("/etc/resolver/doxx")
 		if err == nil {
-			expected := "nameserver 8.8.8.8\ndomain doxx\nsearch doxx\noptions ndots:0"
+			expected := "domain doxx\nnameserver 1.1.1.1\nsearch_order 1\ntimeout 5\noptions private"
 			status["resolver"] = string(content) == expected
 		}
 
@@ -2143,7 +2143,7 @@ func setupCAandDNS() error {
 			}
 
 			// Create temporary file with resolver content
-			resolverContent := []byte("nameserver 8.8.8.8\ndomain doxx\nsearch doxx\noptions ndots:0")
+			resolverContent := []byte("domain doxx\nnameserver 1.1.1.1\nsearch_order 1\ntimeout 5\noptions private")
 			tmpfile, err := os.CreateTemp("", "resolver")
 			if err != nil {
 				return fmt.Errorf("failed to create temporary file: %v", err)
