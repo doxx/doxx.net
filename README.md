@@ -29,7 +29,7 @@ Currently confirmed to bypass censorship in the following countries:
 - 🇸🇦 Saudi Arabia
 - 🇦🇪 United Arab Emirates
 
-Join us on Discord: https://discord.gg/es546Rt9
+Join us on Discord: https://discord.gg/nNG2snhC
 ---
 
 ## **Key Features**
@@ -176,9 +176,9 @@ The included Doxxulator tool provides powerful location spoofing capabilities th
 ### Installing your certificates to your OS or browser
 
 #### Certificate Generation
-Doxxulator generates two files in your current working directory:
-- `cert.pem` - The certificate file
-- `key.pem` - The private key file
+Doxxulator automatically generates and stores two files in your home directory under `.doxx.net`:
+- `~/.doxx.net/doxxulator-ca.crt` - The certificate file
+- `~/.doxx.net/doxxulator-ca.key` - The private key file
 
 #### Installing on Different Systems
 
@@ -472,4 +472,4 @@ The full text of these licenses can be found in the respective repositories:
 All third-party software components are distributed under their respective licenses. The full text of these licenses and their requirements must be included with any distribution of this software.
 
 
-Join us on Discord: https://discord.gg/es546Rt9
+Join us on Discord: https://discord.gg/nNG2snhC
