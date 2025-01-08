@@ -331,8 +331,6 @@ Note: The CSR must be properly formatted and contain the correct domain name.
 
 ---
 
-// ... existing content ...
-
 ## Certificate Management Guide
 
 ### 1. Generate a Private Key
@@ -585,16 +583,6 @@ ip route add x.x.x.x via 10.1.0.100
   go get github.com/klauspost/compress
   go get golang.org/x/sys
   ```
-
-### Build Commands
-bash
-Build for all platforms
-make all
-Build for specific platform
-make linux-amd64
-make mac-arm64
-make windows-amd64
-
 ---
 
 ## License
