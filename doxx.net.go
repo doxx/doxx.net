@@ -993,6 +993,11 @@ func main() {
 	// Error and signal handling
 	go func() {
 		select {
+		case err := <-errChan:
+			log.Printf("Connection error: %v", err)
+			cleanup(routeManager, client, ctx)
+			cancel() // Cancel context to stop all goroutines
+			os.Exit(1)
 		case <-sigChan:
 			log.Println("Received interrupt signal")
 			cleanup(routeManager, client, ctx)
@@ -2215,4 +2220,66 @@ func setupCAandDNS() error {
 	}
 
 	return nil
+}
+
+func installCertificate(certPath string) error {
+	switch runtime.GOOS {
+	case "windows":
+		cmd := exec.Command("certutil", "-addstore", "root", certPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to install certificate: %v\nOutput: %s", err, out)
+		}
+		debugLog("Certificate installed successfully using certutil")
+		return nil
+
+	case "darwin":
+		// Install in system keychain
+		cmd := exec.Command("security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", certPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to install certificate in system keychain: %v\nOutput: %s", err, out)
+		}
+
+		// Create directory for Unix-style cert location if it doesn't exist
+		if err := exec.Command("sudo", "mkdir", "-p", "/etc/ssl/certs").Run(); err != nil {
+			return fmt.Errorf("failed to create Unix-style cert directory: %v", err)
+		}
+
+		// Copy certificate to Unix-style location for curl and other tools
+		if err := exec.Command("sudo", "cp", certPath, "/etc/ssl/certs/doxx-root-ca.crt").Run(); err != nil {
+			return fmt.Errorf("failed to install certificate for Unix-style tools: %v", err)
+		}
+
+		debugLog("Certificate installed successfully in both system keychain and Unix-style location")
+		return nil
+
+	case "linux":
+		// Create necessary directories
+		if err := exec.Command("sudo", "mkdir", "-p", "/usr/local/share/ca-certificates").Run(); err != nil {
+			return fmt.Errorf("failed to create certificate directory: %v", err)
+		}
+
+		// Copy certificate to the CA directory
+		if err := exec.Command("sudo", "cp", certPath, "/usr/local/share/ca-certificates/doxx-root-ca.crt").Run(); err != nil {
+			return fmt.Errorf("failed to copy certificate: %v", err)
+		}
+
+		// Update CA certificates
+		if err := exec.Command("sudo", "update-ca-certificates").Run(); err != nil {
+			return fmt.Errorf("failed to update CA certificates: %v", err)
+		}
+
+		// Create symlink in /etc/ssl/certs for compatibility
+		if err := exec.Command("sudo", "ln", "-sf",
+			"/usr/local/share/ca-certificates/doxx-root-ca.crt",
+			"/etc/ssl/certs/doxx-root-ca.pem").Run(); err != nil {
+			debugLog("Warning: Failed to create symlink in /etc/ssl/certs: %v", err)
+			// Don't return error as this is not critical
+		}
+
+		debugLog("Certificate installed successfully on Linux")
+		return nil
+
+	}
+
+	return fmt.Errorf("unsupported platform for certificate installation")
 }
