@@ -29,7 +29,7 @@ Currently confirmed to bypass censorship in the following countries:
 - 🇸🇦 Saudi Arabia
 - 🇦🇪 United Arab Emirates
 
-Join us on Discord: https://discord.gg/nNG2snhC
+Join us on Discord: https://discord.gg/Gr9rByrEzZ
 ---
 
 ## **Key Features**
@@ -472,4 +472,4 @@ The full text of these licenses can be found in the respective repositories:
 All third-party software components are distributed under their respective licenses. The full text of these licenses and their requirements must be included with any distribution of this software.
 
 
-Join us on Discord: https://discord.gg/nNG2snhC
+Join us on Discord: https://discord.gg/Gr9rByrEzZ
