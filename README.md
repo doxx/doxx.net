@@ -10,17 +10,26 @@
  
 ```
 
-# **doxx.net (BETA): Advanced VPN, Darknet, and Location Spoofing Platform**
+# **doxx.net (BETA): Advanced VPN, Parallel Internet, and Location Platform**
 
-**doxx.net** is a comprehensive privacy and security platform that combines a high-performance VPN service with advanced location spoofing capabilities. The platform consists of two main components:
+**doxx.net** is a comprehensive privacy and security platform that combines a high-performance VPN service with a parallel Internet that includes location managment capabilities. The platform consists of two main components:
 - **doxx.net Core**: A stealth VPN and darknet service
+- **API**: Creation of .doxx domains, create dns records, sign ssl certificates. 
 - **Doxxulator**: Advanced location and browser emulation engine
 
-Together, these components provide a complete solution for:
+Together, these components provide:
+- Parallel Internet
 - Bypassing network restrictions and censorship
 - Location spoofing and geo-unblocking
 - Browser fingerprint manipulation
 - Secure and private communication
+- Services can operate entirely within the alternative internet
+- No dependence on public domain registrars
+- Immune to domain seizures or DNS blocking
+- Resistant to deep packet inspection and traffic analysis
+- No public footprint for internal services
+- Complete isolation from internet-based attacks
+- Granular control over access and permissions
 
 Currently confirmed to bypass censorship in the following countries:
 - 🇨🇳 China
