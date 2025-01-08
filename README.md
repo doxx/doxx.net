@@ -402,7 +402,7 @@ A parallel internet represents a revolutionary approach to network infrastructur
 
 At its core, this parallel infrastructure provides a foundation for truly independent digital operations. When you connect to this network, you're not just encrypting your traffic or hiding your identity - you're stepping into an entirely separate digital environment. This environment comes with its own domain system, certificate authorities, and routing protocols, all operating independently of traditional internet governance structures.
 
-The mesh networking capability means that users can automatically find the optimal path to their destination, routing through other nodes when direct connections aren't optimal. If one entry point becomes congested or unavailable, the network seamlessly redirects through alternative paths. This resilient architecture ensures consistent service availability and creates a network that becomes stronger and more robust as more users join.
+The mesh networking capability means that users can automatically find the optimal path into the doxx.net network and it will automatically manage the internal routing to ensure everything "just works."
 
 The advantages of this approach are substantial. Organizations can operate services completely isolated from internet-based attacks while maintaining full control over their digital resources. There's no dependence on public domain registrars, no vulnerability to domain seizures, and no exposure to traditional DNS-based attacks. Every aspect of the network, from IP assignment to certificate management, operates within this controlled environment.
 
