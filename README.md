@@ -10,7 +10,7 @@
  
 ```
 
-# **doxx.net (BETA): Advanced VPN, Parallel Internet, and Location Platform**
+# **doxx.net (BETA): Advanced VPN, Parallel Internet, and De-Location Platform**
 
 **doxx.net** is a comprehensive privacy and security platform that combines a high-performance VPN service with a parallel Internet that includes location managment capabilities. The platform consists of two main components:
 - **doxx.net Core**: A stealth VPN and darknet service
