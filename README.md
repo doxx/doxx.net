@@ -221,7 +221,7 @@ Doxxulator automatically generates and stores two files in your home directory u
 ```
 ---
 
-# doxx.net setup API Reference
+# Setup API Reference
 
 ## https://setup.doxx.net/
 This is the API backend for managing user accounts, domains, DNS records, and certificate signing for the `doxx.net` platform. 
