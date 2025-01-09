@@ -38,6 +38,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -84,6 +85,8 @@ var (
 	snarfDNS              = true // Changed to default true
 	bandwidthDisplayReady = make(chan struct{})
 	dnsNatTable           *DNSNatTable
+	dnsBlocker            *DNSBlocker
+	blockBadDNS           bool
 )
 
 func init() {
@@ -512,7 +515,7 @@ func (bs *BandwidthStats) GetReadable() string {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	return fmt.Sprintf("\r↓ %-12s  ↑ %-12s    ↓ %-10s  ↑ %-10s    ",
+	return fmt.Sprintf("↓ %-12s  ↑ %-12s    ↓ %-10s  ↑ %-10s",
 		formatBytes(bs.rxBytes),
 		formatBytes(bs.txBytes),
 		formatBits(bs.rxBytes),
@@ -604,6 +607,46 @@ func hexDump(data []byte) string {
 	return buf.String()
 }
 
+// Add new display manager type and global variable
+type DisplayManager struct {
+	mu            sync.Mutex
+	lastBandwidth string
+	lastBlocked   string
+}
+
+// Add these as global variables at the package level
+var (
+	bandwidthStats *BandwidthStats
+	displayManager *DisplayManager
+)
+
+// Remove the existing displayManager declaration since it's now global
+// var displayManager *DisplayManager
+
+func NewDisplayManager() *DisplayManager {
+	return &DisplayManager{}
+}
+
+func (dm *DisplayManager) Update(bandwidth, blocked string) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	// Clear the current line
+	fmt.Print("\r\033[K")
+
+	// If we have both bandwidth and blocked info
+	if bandwidth != "" && blocked != "" {
+		fmt.Printf("\r%s | 🛡️  %s", bandwidth, blocked)
+	} else if bandwidth != "" {
+		fmt.Printf("\r%s", bandwidth)
+	} else if blocked != "" {
+		fmt.Printf("\r🛡️  %s", blocked)
+	}
+
+	dm.lastBandwidth = bandwidth
+	dm.lastBlocked = blocked
+}
+
 func main() {
 	var (
 		serverAddr  string
@@ -638,6 +681,7 @@ func main() {
 	flag.BoolVar(&keepSSH, "keep-established-ssh", false, "Maintain existing SSH connections")
 	flag.BoolVar(&noSnarfDNS, "no-snarf-dns", false, "Disable DNS traffic snarfing")
 	flag.BoolVar(&noBandwidth, "no-bandwidth", false, "Disable bandwidth statistics")
+	flag.BoolVar(&blockBadDNS, "block-bad-dns", false, "Block bad DNS traffic")
 	flag.Parse()
 
 	if debug {
@@ -658,6 +702,75 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize DNS blocker right here, before "Setting up tunnel device..."
+	if blockBadDNS {
+		log.Printf("Initializing DNS blocking...")
+		fmt.Print("\n\n")
+		fmt.Printf("🛡️  DNS Protection\n")
+		fmt.Println("────────────────────────────")
+		fmt.Printf("Downloading blocklist from hagezi/dns-blocklists...\n")
+
+		// Create DNS blocker with retry logic
+		var err error
+		for attempt := 1; attempt <= 3; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(attempt*30)*time.Second)
+
+			if dnsBlocker == nil {
+				dnsBlocker = NewDNSBlocker()
+			}
+
+			// Try pro list first, fall back to basic
+			urls := []string{
+				"https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/pro.txt",
+				"https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/basic.txt",
+			}
+
+			for _, url := range urls {
+				err = dnsBlocker.UpdateBlocklist(ctx, url)
+				if err == nil {
+					log.Printf("✓ Successfully downloaded blocklist from %s", url)
+					break
+				}
+			}
+			cancel()
+
+			if err == nil {
+				// Start background updater
+				go func() {
+					ticker := time.NewTicker(24 * time.Hour)
+					defer ticker.Stop()
+
+					for range ticker.C {
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+						if err := dnsBlocker.UpdateBlocklist(ctx, urls[0]); err != nil {
+							log.Printf("Warning: Failed to update blocklist: %v", err)
+						}
+						cancel()
+					}
+				}()
+				break
+			}
+
+			if attempt < 3 {
+				log.Printf("Attempt %d failed, retrying in %d seconds...", attempt, attempt*2)
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+			}
+		}
+
+		if err != nil {
+			log.Printf("❌ Failed to initialize DNS blocklist after 3 attempts: %v", err)
+			log.Printf("Continuing without DNS blocking...")
+			blockBadDNS = false
+			dnsBlocker = nil
+		} else {
+			fmt.Printf("✓ DNS Protection initialized successfully\n")
+		}
+
+		fmt.Println("────────────────────────────")
+		time.Sleep(1 * time.Second)
+	}
+
+	log.Printf("Setting up tunnel device...")
 	// Create platform-specific interface
 	tunDevice, err := createTunDevice("doxx")
 	if err != nil {
@@ -816,15 +929,14 @@ func main() {
 	packet := make([]byte, MTU)
 
 	// Create bandwidth stats if enabled
-	var bandwidthStats *BandwidthStats
 	if !noBandwidth {
 		bandwidthStats = NewBandwidthStats()
+		displayManager = NewDisplayManager()
 
-		// Wait for geo information to be displayed before starting bandwidth
 		go func() {
 			select {
 			case <-bandwidthDisplayReady:
-				ticker := time.NewTicker(5 * time.Second)
+				ticker := time.NewTicker(1 * time.Second)
 				defer ticker.Stop()
 
 				for {
@@ -836,7 +948,7 @@ func main() {
 							continue
 						}
 						bandwidthStats.Update(stats.rx, stats.tx)
-						fmt.Printf("\r%s", bandwidthStats.GetReadable())
+						displayManager.Update(bandwidthStats.GetReadable(), "")
 					case <-ctx.Done():
 						return
 					}
@@ -876,29 +988,6 @@ func main() {
 					continue
 				}
 
-				// Enhanced packet logging
-				if debug {
-					proto := packet[9]
-					srcIP := net.IP(packet[12:16])
-					dstIP := net.IP(packet[16:20])
-
-					srcPort := uint16(0)
-					dstPort := uint16(0)
-					if proto == 6 || proto == 17 {
-						srcPort = uint16(packet[20])<<8 | uint16(packet[21])
-						dstPort = uint16(packet[22])<<8 | uint16(packet[23])
-					}
-
-					debugLog("[TUN→Transport] Packet Details:\n"+
-						"Protocol: %d\n"+
-						"Source: %v:%d\n"+
-						"Destination: %v:%d\n"+
-						"Length: %d bytes\n"+
-						"Hex dump:\n%s",
-						proto, srcIP, srcPort, dstIP, dstPort, n,
-						hexDump(packet[:n]))
-				}
-
 				if !isValidIPPacket(packet[:n]) {
 					debugLog("[TUN→Transport] Skipping invalid IP packet from TUN")
 					continue
@@ -912,7 +1001,11 @@ func main() {
 					if debug {
 						debugLog("Processing DNS packet")
 					}
-					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
+					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
+					// Skip if packet was handled internally (nil return)
+					if packetCopy == nil {
+						continue
+					}
 				}
 
 				if err := client.WritePacket(packetCopy); err != nil {
@@ -948,7 +1041,7 @@ func main() {
 					// Create copy only for DNS packets that need modification
 					packetCopy := make([]byte, len(packet))
 					copy(packetCopy, packet)
-					packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
+					packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
 				} else {
 					// Use original packet for non-DNS traffic
 					packetToWrite = packet
@@ -1806,7 +1899,7 @@ type VPNConfig struct {
 }
 
 // Function to handle DNS packet rewriting
-func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable) []byte {
+func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable, tun io.Writer) []byte {
 	// Ensure it's an IPv4 packet
 	if len(packet) < 20 || packet[0]>>4 != 4 {
 		return packet
@@ -1818,12 +1911,11 @@ func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable) []b
 	}
 
 	// Extract ports and query ID
+	srcIP := net.IP(packet[12:16])
+	dstIP := net.IP(packet[16:20])
 	srcPort := uint16(packet[20])<<8 | uint16(packet[21])
 	dstPort := uint16(packet[22])<<8 | uint16(packet[23])
 	queryID := uint16(packet[28])<<8 | uint16(packet[29])
-
-	srcIP := net.IP(packet[12:16])
-	dstIP := net.IP(packet[16:20])
 
 	if debug {
 		debugLog("Processing packet - src=%v:%d dst=%v:%d queryID=%d",
@@ -1883,6 +1975,98 @@ func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable) []b
 		updateIPChecksum(packet)
 		if packet[26:28][0] != 0 || packet[26:28][1] != 0 {
 			updateUDPChecksum(packet)
+		}
+	}
+
+	if dstPort == DNS_PORT && dnsBlocker != nil {
+		dnsPayload := packet[28:] // Skip IP + UDP headers
+		if len(dnsPayload) < 12 {
+			return packet
+		}
+
+		queryID := uint16(packet[28])<<8 | uint16(packet[29])
+		key := fmt.Sprintf("%s:%d:%d", srcIP.String(), srcPort, queryID)
+
+		// Only add NAT entry if it doesn't exist and dstIP is a public DNS server
+		existingEntry := natTable.Lookup(srcIP, srcPort, queryID)
+		if existingEntry == nil && !dstIP.Equal(serverIP) {
+			if debug {
+				debugLog("Adding NAT entry with key: %s, original DNS: %s", key, dstIP)
+			}
+			natTable.Add(srcIP, srcPort, dstIP, queryID)
+		}
+
+		// Extract domain from DNS query
+		offset := 12
+		var domain strings.Builder
+		for offset < len(dnsPayload) {
+
+			length := int(dnsPayload[offset])
+			if length == 0 {
+				break
+			}
+			if offset+length+1 > len(dnsPayload) {
+				break
+			}
+			if domain.Len() > 0 {
+				domain.WriteString(".")
+			}
+			domain.Write(dnsPayload[offset+1 : offset+1+length])
+			offset += length + 1
+		}
+
+		domainStr := domain.String()
+		if domainStr != "" && dnsBlocker.ShouldBlock(domainStr) {
+			// Pad domain string to typical FQDN length
+			if len(domainStr) > 40 {
+				domainStr = domainStr[:37] + "..."
+			}
+			paddedDomain := fmt.Sprintf("%-40s", domainStr)
+
+			// Update display with blocked domain
+			if displayManager != nil {
+				var bandwidth string
+				if bandwidthStats != nil {
+					bandwidth = bandwidthStats.GetReadable()
+				}
+				displayManager.Update(bandwidth, fmt.Sprintf("Blocked: %s", paddedDomain))
+			}
+
+			// Look up the original DNS server from NAT table
+			natEntry := natTable.Lookup(srcIP, srcPort, queryID)
+
+			originalDNS := dstIP
+			if natEntry != nil {
+				originalDNS = natEntry.OriginalDst
+				if debug {
+					debugLog("Using NAT entry original DNS: %v", originalDNS)
+				}
+			} else if debug {
+				debugLog("No NAT entry found, using packet destination: %v", originalDNS)
+			}
+
+			// Create NXDOMAIN response using the original DNS server IP
+			response := createBlockedDNSResponse(packet, originalDNS)
+
+			if debug {
+				debugLog("Original query packet:")
+				debugLog("Src IP:Port = %v:%d", srcIP, srcPort)
+				debugLog("Dst IP:Port = %v:%d (Original DNS server)", originalDNS, dstPort)
+				debugLog("NXDOMAIN response packet:")
+				debugLog("Src IP:Port = %v:%d (Original DNS server)", net.IP(response[12:16]),
+					uint16(response[20])<<8|uint16(response[21]))
+				debugLog("Dst IP:Port = %v:%d (Client)", net.IP(response[16:20]),
+					uint16(response[22])<<8|uint16(response[23]))
+			}
+
+			// Write the NXDOMAIN response
+			if _, err := tun.Write(response); err != nil {
+				debugLog("Failed to write NXDOMAIN response to TUN: %v", err)
+			} else {
+				debugLog("Successfully wrote NXDOMAIN response to TUN device")
+			}
+
+			return nil
 		}
 	}
 
@@ -2275,4 +2459,140 @@ func debugICMPPacket(prefix string, packet []byte) {
 
 	debugLog("%s ICMP packet: %s -> %s (Type: %d, Code: %d, ID: %d, Seq: %d)",
 		prefix, srcIP, dstIP, icmpType, icmpCode, icmpID, icmpSeq)
+}
+
+// DNSBlocker manages the DNS blocking functionality
+type DNSBlocker struct {
+	blocklist map[string]struct{}
+	mu        sync.RWMutex
+}
+
+// NewDNSBlocker creates a new DNS blocker instance
+func NewDNSBlocker() *DNSBlocker {
+	return &DNSBlocker{
+		blocklist: make(map[string]struct{}),
+	}
+}
+
+// UpdateBlocklist downloads and updates the DNS blocklist
+func (db *DNSBlocker) UpdateBlocklist(ctx context.Context, url string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download blocklist: %v", err)
+	}
+	defer resp.Body.Close()
+
+	newBlocklist := make(map[string]struct{})
+	scanner := bufio.NewScanner(resp.Body)
+	count := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "#") {
+			newBlocklist[line] = struct{}{}
+			count++
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading blocklist: %v", err)
+	}
+
+	db.mu.Lock()
+	db.blocklist = newBlocklist
+	db.mu.Unlock()
+
+	// Add this debug logging
+	log.Printf("DNS Blocklist loaded with %d domains", count)
+	// Log a few example domains
+	i := 0
+	for domain := range newBlocklist {
+		if i < 5 {
+			log.Printf("Sample blocked domain: %s", domain)
+			i++
+		} else {
+			break
+		}
+	}
+	return nil
+}
+
+// ShouldBlock checks if a domain should be blocked
+func (db *DNSBlocker) ShouldBlock(domain string) bool {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	// Ignore system domains
+	if strings.HasSuffix(domain, ".local") ||
+		strings.HasSuffix(domain, ".doxx") ||
+		strings.HasSuffix(domain, ".arpa") ||
+		strings.Contains(domain, "_tcp.") ||
+		strings.Contains(domain, "_udp.") {
+		return false
+	}
+
+	// Check exact match
+	if _, exists := db.blocklist[domain]; exists {
+		debugLog("Blocked domain: %s (exact match)", domain)
+		return true
+	}
+
+	// Check parent domains
+	parts := strings.Split(domain, ".")
+	for i := 0; i < len(parts)-1; i++ {
+		parentDomain := strings.Join(parts[i:], ".")
+		if _, exists := db.blocklist[parentDomain]; exists {
+			debugLog("Blocked domain: %s (parent domain match: %s)", domain, parentDomain)
+			return true
+		}
+	}
+	return false
+}
+
+// Update createBlockedDNSResponse to accept the original DNS server IP
+func createBlockedDNSResponse(originalPacket []byte, dnsServerIP net.IP) []byte {
+	response := make([]byte, len(originalPacket))
+	copy(response, originalPacket)
+
+	// Use original DNS server IP as source
+	copy(response[12:16], dnsServerIP.To4())     // Source IP is DNS server
+	copy(response[16:20], originalPacket[12:16]) // Destination IP is original client
+
+	// Swap source and destination ports
+	copy(response[20:22], originalPacket[22:24]) // Source port (DNS port 53)
+	copy(response[22:24], originalPacket[20:22]) // Destination port (client port)
+
+	// Update UDP length (offset 24, 2 bytes)
+	udpLen := len(response) - 20 // Total length minus IP header
+	response[24] = byte(udpLen >> 8)
+	response[25] = byte(udpLen)
+
+	// DNS header starts at offset 28
+	response[28+2] = 0x81 // Set QR bit (response) and keep original opcode
+	response[28+3] = 0x83 // Set RCODE to NXDOMAIN (3)
+
+	// Keep the QDCOUNT but zero out other counts
+	response[28+4] = originalPacket[28+4] // QDCOUNT high byte
+	response[28+5] = originalPacket[28+5] // QDCOUNT low byte
+	response[28+6] = 0x00                 // ANCOUNT = 0
+	response[28+7] = 0x00
+	response[28+8] = 0x00 // NSCOUNT = 0
+	response[28+9] = 0x00
+	response[28+10] = 0x00 // ARCOUNT = 0
+	response[28+11] = 0x00
+
+	// Update IP total length field (offset 2, 2 bytes)
+	totalLen := len(response)
+	response[2] = byte(totalLen >> 8)
+	response[3] = byte(totalLen)
+
+	// Update checksums
+	updateIPChecksum(response)
+	updateUDPChecksum(response)
+
+	return response
 }
