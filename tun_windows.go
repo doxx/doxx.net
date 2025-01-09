@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -150,28 +149,9 @@ func (tun *TunDevice) Read(packet []byte) (int, error) {
 		return 0, nil
 	}
 
-	// Check IP version
-	version := data[0] >> 4
-	if version != 4 {
-		debugLog("Skipping IPv6 packet (not supported)")
-		return 0, nil
-	}
-
-	// Only log packet details if it's an IPv4 packet we're going to process
-	debugLog("[TUN→Transport] Packet Details:\n"+
-		"Protocol: %d\n"+
-		"Source: %s\n"+
-		"Destination: %s\n"+
-		"Length: %d bytes\n"+
-		"Hex dump:\n%s",
-		data[9],
-		net.IP(data[12:16]).String(),
-		net.IP(data[16:20]).String(),
-		len(data),
-		hex.Dump(data))
-
-	copy(packet, data)
-	return len(data), nil
+	// Copy data to the provided packet buffer
+	n := copy(packet, data)
+	return n, nil
 }
 
 func (tun *TunDevice) Write(packet []byte) (int, error) {

@@ -1177,7 +1177,25 @@ func setupTUN(ifName string, assignedIP string, serverIP string, prefixLen int) 
 			debugLog("Interface IP config:\n%s", output)
 		}
 
-		return nil
+		// Add DNS server configuration
+		dnsCmd := exec.Command("netsh", "interface", "ipv4", "add", "dnsservers",
+			ifName, "1.1.1.1", "index=1")
+		if out, err := dnsCmd.CombinedOutput(); err != nil {
+			debugLog("Warning: Failed to set DNS server: %v\nOutput: %s", err, string(out))
+			// Continue anyway as this is not critical for basic functionality
+		} else {
+			debugLog("Successfully configured DNS server for interface %s", ifName)
+		}
+
+		// Add backup DNS server
+		backupDNSCmd := exec.Command("netsh", "interface", "ipv4", "add", "dnsservers",
+			ifName, "8.8.8.8", "index=2")
+		if out, err := backupDNSCmd.CombinedOutput(); err != nil {
+			debugLog("Warning: Failed to set backup DNS server: %v\nOutput: %s", err, string(out))
+		} else {
+			debugLog("Successfully configured backup DNS server for interface %s", ifName)
+		}
+
 	case "linux":
 		// First, flush any existing configuration
 		clearCmd := exec.Command("ip", "addr", "flush", "dev", ifName)
@@ -2060,10 +2078,21 @@ func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable, tun
 			}
 
 			// Write the NXDOMAIN response
-			if _, err := tun.Write(response); err != nil {
+			n, err := tun.Write(response)
+			if err != nil {
 				debugLog("Failed to write NXDOMAIN response to TUN: %v", err)
+			} else if n != len(response) {
+				debugLog("Incomplete write to TUN device: wrote %d of %d bytes", n, len(response))
+				// On Windows with WinTUN, partial writes can occur
+				if runtime.GOOS == "windows" && n > 0 {
+					// Attempt to write remaining bytes
+					remaining := response[n:]
+					if _, err := tun.Write(remaining); err != nil {
+						debugLog("Failed to write remaining bytes: %v", err)
+					}
+				}
 			} else {
-				debugLog("Successfully wrote NXDOMAIN response to TUN device")
+				debugLog("Successfully wrote %d byte NXDOMAIN response to TUN device", n)
 			}
 
 			return nil
