@@ -40,6 +40,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -50,9 +51,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elazarl/goproxy"
+)
+
+var (
+	tlsErrorHosts sync.Map
 )
 
 type Config struct {
@@ -69,6 +75,8 @@ type Config struct {
 	CustomLat        float64
 	CustomLon        float64
 	AllowPassthrough bool
+	PassThrough      bool
+	AppVersion       string
 }
 
 var (
@@ -78,30 +86,109 @@ var (
 		AcceptLang   string
 		Platform     string
 		Architecture string
+		AppVersion   string
 	}{
-		"chrome": {
-			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-			AcceptLang:   "en-US,en;q=0.9",
-			Platform:     "MacIntel",
-			Architecture: "x86_64",
-		},
-		"firefox": {
-			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:89.0) Gecko/20100101 Firefox/89.0",
-			AcceptLang:   "en-US,en;q=0.5",
-			Platform:     "MacIntel",
-			Architecture: "x86_64",
-		},
-		"safari": {
-			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
-			AcceptLang:   "en-US,en;q=0.9",
-			Platform:     "MacIntel",
-			Architecture: "x86_64",
-		},
-		"edge": {
-			UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59",
+		// Chrome variants
+		"chrome-windows": {
+			UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 			AcceptLang:   "en-US,en;q=0.9",
 			Platform:     "Win32",
 			Architecture: "x86_64",
+			AppVersion:   "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		},
+		"chrome-mac": {
+			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "MacIntel",
+			Architecture: "x86_64",
+			AppVersion:   "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		},
+		"chrome-mac-arm": {
+			UserAgent:    "Mozilla/5.0 (Macintosh; Apple Silicon Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "MacIntel",
+			Architecture: "arm64",
+			AppVersion:   "5.0 (Macintosh; Apple Silicon Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		},
+
+		// Firefox variants
+		"firefox-windows": {
+			UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+			AcceptLang:   "en-US,en;q=0.5",
+			Platform:     "Win32",
+			Architecture: "x86_64",
+			AppVersion:   "5.0 (Windows)",
+		},
+		"firefox-mac": {
+			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
+			AcceptLang:   "en-US,en;q=0.5",
+			Platform:     "MacIntel",
+			Architecture: "x86_64",
+			AppVersion:   "5.0 (Macintosh)",
+		},
+
+		// Edge variants
+		"edge-windows": {
+			UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "Win32",
+			Architecture: "x86_64",
+			AppVersion:   "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+		},
+		"edge-mac": {
+			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "MacIntel",
+			Architecture: "x86_64",
+			AppVersion:   "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+		},
+
+		// Safari variants
+		"safari-mac": {
+			UserAgent:    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "MacIntel",
+			Architecture: "x86_64",
+			AppVersion:   "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+		},
+		"safari-mac-arm": {
+			UserAgent:    "Mozilla/5.0 (Macintosh; Apple Silicon Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "MacIntel",
+			Architecture: "arm64",
+			AppVersion:   "5.0 (Macintosh; Apple Silicon Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+		},
+
+		// Mobile variants
+		"safari-ios": {
+			UserAgent:    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "iPhone",
+			Architecture: "arm64",
+			AppVersion:   "5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+		},
+		"chrome-android": {
+			UserAgent:    "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+			AcceptLang:   "en-US,en;q=0.9",
+			Platform:     "Android",
+			Architecture: "arm64",
+			AppVersion:   "5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+		},
+
+		// CLI tools
+		"curl": {
+			UserAgent:    "curl/8.4.0",
+			AcceptLang:   "*/*",
+			Platform:     "CLI",
+			Architecture: "x86_64",
+			AppVersion:   "curl/8.4.0",
+		},
+		"wget": {
+			UserAgent:    "Wget/1.21.4",
+			AcceptLang:   "*/*",
+			Platform:     "CLI",
+			Architecture: "x86_64",
+			AppVersion:   "Wget/1.21.4",
 		},
 	}
 
@@ -190,6 +277,19 @@ var (
 		// Default to en-US for any unlisted locations
 	}
 )
+
+type logWriter struct {
+	cb func(string, ...interface{})
+}
+
+func (l *logWriter) Write(p []byte) (n int, err error) {
+	l.cb(string(p))
+	return len(p), nil
+}
+
+func NewLogWriter(cb func(string, ...interface{})) io.Writer {
+	return &logWriter{cb: cb}
+}
 
 func getDoxxNetDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
@@ -336,6 +436,28 @@ func startDoxxulator() {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = config.Debug
 
+	// Handle TLS errors by capturing the warning logs
+	proxy.Logger = log.New(&logWriter{
+		cb: func(format string, v ...interface{}) {
+			msg := fmt.Sprintf(format, v...)
+			if strings.Contains(msg, "Cannot handshake client") && strings.Contains(msg, "unknown certificate") {
+				// Extract hostname from the error message
+				parts := strings.Split(msg, " ")
+				for _, part := range parts {
+					if strings.Contains(part, ":443") {
+						hostname := strings.TrimSuffix(part, ":443")
+						tlsErrorHosts.Store(strings.ToLower(hostname), true)
+						if config.Debug {
+							log.Printf("🔓 Adding %s to passthrough list (handshake failed)", hostname)
+						}
+						break
+					}
+				}
+			}
+			log.Printf(format, v...)
+		},
+	}, "", log.LstdFlags)
+
 	// Load the certificates (which we know exist)
 	rootCert, err := tls.LoadX509KeyPair(config.CertPath, config.KeyPath)
 	if err != nil {
@@ -377,63 +499,21 @@ func startDoxxulator() {
 			log.Printf("   Passthrough Enabled: %v", config.AllowPassthrough)
 		}
 
-		// Known hosts that use certificate pinning
-		pinnedHosts := []string{
-			// Slack domains
-			".slack.com", // This will catch all Slack subdomains
-			"edgeapi.slack.com",
-			"wss-backup.slack.com",
-			".slackb.com",
+		hostName := strings.Split(strings.ToLower(host), ":")[0]
 
-			// Discord domains
-			".cursor.sh",
-			"cursor.sh",
-
-			// Google stuff
-			".googleapis.com",
-
-			// Discord domains
-			".discord.com",
-			"discord.com",
-			".discordapp.net",
-			"media.discordapp.net",
-			"gateway.discord.gg",
-
-			// Apple/iCloud domains
-			"gateway.icloud.com",
-			"gsa.apple.com",
-			"icloud.com",
-			"apple.com",
-			".apple.com",
-			"push.apple.com",
-		}
-
-		if config.AllowPassthrough {
-			// Check if host should bypass MITM
-			hostLower := strings.ToLower(host)
-			hostName := strings.Split(hostLower, ":")[0] // Remove port number if present
-
-			for _, pinned := range pinnedHosts {
-				if strings.HasSuffix(hostName, pinned) ||
-					(strings.HasPrefix(pinned, ".") && strings.Contains(hostName, pinned)) {
-					if config.Debug {
-						log.Printf("🔒 Bypassing MITM for %s (certificate pinning detected)", host)
-					}
-					// Return immediately with a direct connection
-					return &goproxy.ConnectAction{
-						Action:    goproxy.ConnectAccept,
-						TLSConfig: nil, // Explicitly set to nil to ensure passthrough
-					}, host
-				}
-			}
-
+		// Check if this host had previous certificate issues
+		if _, isPinned := tlsErrorHosts.Load(hostName); isPinned {
 			if config.Debug {
-				log.Printf("⚠️ Host %s not in pinned list, proceeding with MITM", hostName)
+				log.Printf("🔓 Using passthrough for %s (previous certificate error)", host)
 			}
+			return &goproxy.ConnectAction{
+				Action:    goproxy.ConnectAccept,
+				TLSConfig: nil,
+			}, host
 		}
 
 		if config.Debug {
-			log.Printf("🔐 Applying MITM for %s", host)
+			log.Printf("🔐 Attempting MITM for %s", host)
 		}
 
 		return &goproxy.ConnectAction{
@@ -512,6 +592,18 @@ func startDoxxulator() {
 func parseFlags() *Config {
 	config := &Config{}
 
+	// Create browser list for help text
+	var browsers []string
+	for browser := range browserProfiles {
+		browsers = append(browsers, browser)
+	}
+	sort.Strings(browsers)
+	browserHelp := fmt.Sprintf("Browser profile to emulate. Available profiles:\n  • %s\n  (empty for passthrough)",
+		strings.Join(browsers, "\n  • "))
+
+	flag.StringVar(&config.Browser, "browser", "", browserHelp)
+	flag.BoolVar(&config.PassThrough, "passthrough", true, "Pass through original browser fingerprint")
+
 	// Create a list of available locations
 	var locationList []string
 	for loc := range locations {
@@ -526,7 +618,6 @@ func parseFlags() *Config {
 
 	// Update flag descriptions
 	flag.StringVar(&config.ListenAddr, "l", "127.0.0.1:8080", "Listen address")
-	flag.StringVar(&config.Browser, "browser", "chrome", "Browser to emulate (chrome, firefox, safari, edge)")
 	flag.StringVar(&config.Location, "location", "newyork-us", locationsHelp)
 	flag.BoolVar(&config.Debug, "log", false, "Enable request logging")
 	flag.Float64Var(&config.CustomLat, "lat", 0, "Custom latitude (required when using -location=custom)")
@@ -563,6 +654,7 @@ func parseFlags() *Config {
 		config.AcceptLang = profile.AcceptLang
 		config.Platform = profile.Platform
 		config.Architecture = profile.Architecture
+		config.AppVersion = profile.AppVersion
 	}
 
 	// Validate location
@@ -686,7 +778,7 @@ func injectHeaders(req *http.Request, config *Config) {
 	req.Header.Set("Sec-CH-UA-Platform", config.Platform)
 	req.Header.Set("Sec-CH-UA-Architecture", config.Architecture)
 
-	// Geolocation headers
+	// Get base coordinates
 	var lat, lon float64
 	if config.Location == "custom" {
 		lat, lon = config.CustomLat, config.CustomLon
@@ -694,110 +786,179 @@ func injectHeaders(req *http.Request, config *Config) {
 		lat, lon = loc.Lat, loc.Lon
 	}
 
-	req.Header.Set("X-Geo-Lat", fmt.Sprintf("%f", lat))
-	req.Header.Set("X-Geo-Lon", fmt.Sprintf("%f", lon))
+	// Add jitter to coordinates
+	jitteredLat, jitteredLon := addGPSJitter(lat, lon)
+
+	// Use jittered coordinates in headers
+	req.Header.Set("X-Geo-Lat", fmt.Sprintf("%.6f", jitteredLat))
+	req.Header.Set("X-Geo-Lon", fmt.Sprintf("%.6f", jitteredLon))
 	req.Header.Set("Permissions-Policy", fmt.Sprintf(
-		"geolocation=(%f %f)",
-		lat, lon,
+		"geolocation=(%.6f %.6f)",
+		jitteredLat, jitteredLon,
 	))
 }
 
 func injectGeolocationScript(resp *http.Response, config *Config) error {
 	var lat, lon float64
-	var timezone, locale string
+	var timezone string
 
 	if config.Location == "custom" {
 		lat, lon = config.CustomLat, config.CustomLon
-		timezone = "UTC"
-		locale = "en-US"
+		timezone = "UTC" // Default timezone for custom locations
 	} else if loc, ok := locations[config.Location]; ok {
 		lat, lon = loc.Lat, loc.Lon
 		timezone = loc.Timezone
-		locale = loc.Locale
 	} else {
 		return nil
 	}
 
+	// Add jitter to coordinates
+	jitteredLat, jitteredLon := addGPSJitter(lat, lon)
+
 	script := fmt.Sprintf(`
 		<script>
-		// Override geolocation API
-		const fakePosition = {
-			coords: {
-				latitude: %f,
-				 longitude: %f,
-				 accuracy: 10,
-				 altitude: null,
-				 altitudeAccuracy: null,
-				 heading: null,
-				 speed: null
-			},
-			timestamp: Date.now()
-		};
+		(function() {
+			// Immediately override geolocation
+			delete navigator.geolocation;
+			Object.defineProperty(navigator, 'geolocation', {
+				value: {
+					getCurrentPosition: function(success, error, options) {
+						setTimeout(function() {
+							success({
+								coords: {
+									latitude: %.6f,
+									longitude: %.6f,
+									accuracy: %.1f,
+									altitude: null,
+									altitudeAccuracy: null,
+									heading: null,
+									speed: null
+								},
+								timestamp: Date.now()
+							});
+						}, 0);
+					},
+					watchPosition: function(success, error, options) {
+						const watchId = Math.floor(Math.random() * 1000000);
+						setTimeout(function() {
+							success({
+								coords: {
+									latitude: %.6f,
+									longitude: %.6f,
+									accuracy: %.1f,
+									altitude: null,
+									altitudeAccuracy: null,
+									heading: null,
+									speed: null
+								},
+								timestamp: Date.now()
+							});
+						}, 0);
+						return watchId;
+					},
+					clearWatch: function(watchId) {}
+				},
+				configurable: false,
+				enumerable: true,
+				writable: false
+			});
 
-		navigator.geolocation.getCurrentPosition = function(success) {
-			success(fakePosition);
-		};
-
-		navigator.geolocation.watchPosition = function(success) {
-			success(fakePosition);
-			return Math.floor(Math.random() * 1000000);
-		};
-
-		// Override timezone and locale
-		const originalDate = Date;
-		Date = class extends originalDate {
-			constructor(...args) {
+			// Override timezone-related functionality
+			const originalDate = Date;
+			const timezone = '%s';
+			
+			// Override Date constructor
+			Date = function(...args) {
 				if (args.length === 0) {
 					const date = new originalDate();
-					return new originalDate(date.toLocaleString('en-US', {timeZone: '%s'}));
+					return new originalDate(date.toLocaleString('en-US', {timeZone: timezone}));
 				}
 				return new originalDate(...args);
+			};
+
+			// Copy static methods
+			Date.now = originalDate.now;
+			Date.parse = originalDate.parse;
+			Date.UTC = originalDate.UTC;
+
+			// Ensure prototype chain is correct
+			Date.prototype = originalDate.prototype;
+			Object.setPrototypeOf(Date, originalDate);
+
+			// Override getTimezoneOffset
+			const originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
+			Date.prototype.getTimezoneOffset = function() {
+				const date = new originalDate();
+				const utcDate = new originalDate(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+				const tzDate = new originalDate(date.toLocaleString('en-US', { timeZone: timezone }));
+				return (utcDate - tzDate) / 60000;
+			};
+
+			// Override Intl.DateTimeFormat
+			const originalDateTimeFormat = Intl.DateTimeFormat;
+			Intl.DateTimeFormat = function(locales, options = {}) {
+				options.timeZone = timezone;
+				return new originalDateTimeFormat(locales, options);
+			};
+			Intl.DateTimeFormat.prototype = originalDateTimeFormat.prototype;
+
+			// Override navigator properties
+			Object.defineProperty(navigator, 'userAgent', {
+				value: '%s',
+				configurable: false,
+				writable: false
+			});
+
+			Object.defineProperty(navigator, 'platform', {
+				value: '%s',
+				configurable: false,
+				writable: false
+			});
+
+			Object.defineProperty(navigator, 'appVersion', {
+				value: '%s',
+				configurable: false,
+				writable: false
+			});
+
+			Object.defineProperty(navigator, 'language', {
+				value: '%s',
+				configurable: false,
+				writable: false
+			});
+
+			Object.defineProperty(navigator, 'languages', {
+				value: ['%s'],
+				configurable: false,
+				writable: false
+			});
+
+			// Override screen properties for iPhone
+			if ('%s' === 'iPhone') {
+				Object.defineProperty(window, 'screen', {
+					value: {
+						availHeight: 844,
+						availWidth: 390,
+						colorDepth: 24,
+						height: 844,
+						width: 390,
+						pixelDepth: 24
+					},
+					configurable: false,
+					writable: false
+				});
 			}
-		};
-
-		// Override Intl.DateTimeFormat
-		Object.defineProperty(Intl.DateTimeFormat.prototype, 'resolvedOptions', {
-			writable: false,
-			configurable: true,
-			value: function() {
-				return {
-					locale: '%s',
-					calendar: 'gregory',
-					numberingSystem: 'latn',
-					timeZone: '%s',
-					hour12: true,
-					weekday: 'long',
-					era: 'long',
-					year: 'numeric',
-					month: 'numeric',
-					day: 'numeric',
-					hour: 'numeric',
-					minute: 'numeric',
-					second: 'numeric',
-					timeZoneName: 'long'
-				};
-			}
-		});
-
-		// Override language settings
-		Object.defineProperty(navigator, 'language', {
-			get: function() { return '%s'; }
-		});
-
-		Object.defineProperty(navigator, 'languages', {
-			get: function() { return ['%s']; }
-		});
-
-		// Override platform detection
-		Object.defineProperty(navigator, 'platform', {
-			get: function() { return '%s'; }
-		});
-
-		Object.defineProperty(navigator, 'userAgent', {
-			get: function() { return '%s'; }
-		});
+		})();
 		</script>
-	`, lat, lon, timezone, locale, timezone, locale, locale, config.Platform, config.UserAgent)
+	`, jitteredLat, jitteredLon, 5.0+mathrand.Float64()*10.0,
+		jitteredLat, jitteredLon, 5.0+mathrand.Float64()*10.0,
+		timezone,
+		config.UserAgent,
+		config.Platform,
+		config.AppVersion,
+		config.AcceptLang,
+		config.AcceptLang,
+		config.Platform)
 
 	// Only inject into HTML responses
 	contentType := resp.Header.Get("Content-Type")
@@ -813,9 +974,9 @@ func injectGeolocationScript(resp *http.Response, config *Config) error {
 	}
 	resp.Body.Close()
 
-	// Insert script before </head> or </body>
-	newBody := regexp.MustCompile(`</head>`).ReplaceAll(body,
-		[]byte(script+"</head>"))
+	// Insert script at the beginning of <head> to ensure it runs first
+	newBody := regexp.MustCompile(`<head>`).ReplaceAll(body,
+		[]byte("<head>"+script))
 
 	// Update response
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
@@ -953,6 +1114,14 @@ func verifyDoxxNetwork() error {
 	}
 
 	return nil
+}
+
+func addGPSJitter(lat, lon float64) (float64, float64) {
+	// Add random jitter between -0.0005 and +0.0005 degrees (roughly 50 meters)
+	latJitter := (mathrand.Float64() - 0.5) * 0.001
+	lonJitter := (mathrand.Float64() - 0.5) * 0.001
+
+	return lat + latJitter, lon + lonJitter
 }
 
 func main() {

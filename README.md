@@ -450,6 +450,12 @@ ip route add 172.16.0.0/12 via 10.1.0.100   # Route private subnet
 # For Windows users:
 route ADD 192.168.1.0 MASK 255.255.255.0 10.1.0.100
 ```
+### IPv6 Privacy Concerns
+IPv6 support has been intentionally disabled in the client due to fundamental privacy and security concerns inherent in dual-stack networks. Also, unlike IPv4's dynamic addressing, IPv6 addresses often contain device identifiers derived from MAC addresses, making cross-network tracking significantly easier even when using a VPN. 
+
+Dual-stack systems perform parallel IPv4 and IPv6 DNS queries, with IPv6 queries frequently bypassing VPN tunnels due to direct route preferences and local DNS resolver behavior. Modern operating systems and applications tend to prefer IPv6 connections when available, which can lead to direct connection leaks outside the VPN tunnel. This is compounded by IPv6's complex routing tables and auto-configuration features that can expose network topology. The protocol's neighbor discovery mechanisms can leak network information, making it challenging to maintain privacy at the local network level. These issues make IPv6 particularly problematic for privacy-focused services, as its inherent design choices prioritize addressability and auto-configuration over privacy. For these reasons, doxx.net operates as an IPv4-only service, providing stronger privacy guarantees by eliminating these common IPv6-related vulnerabilities.
+
+This may change in the future, but for now, doxx.net operates as an IPv4-only service.
 
 ### Common Routing Scenarios
 
