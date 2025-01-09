@@ -1991,14 +1991,14 @@ func updateUDPChecksum(packet []byte) {
 func checkCAandDNSConfig() (bool, map[string]bool) {
 	status := make(map[string]bool)
 
-	fmt.Println("\nChecking Doxx.net configuration...")
+	fmt.Println("\nChecking doxx.net configuration...")
 	fmt.Println("────────────────────────────")
 
 	// Check CA certificate installation
 	switch runtime.GOOS {
 	case "darwin":
 		// Check system trust store
-		cmd := exec.Command("security", "find-certificate", "-c", "Doxx.net Root CA", "/Library/Keychains/System.keychain")
+		cmd := exec.Command("security", "find-certificate", "-c", "doxx.net Root CA", "/Library/Keychains/System.keychain")
 		status["ca_system"] = cmd.Run() == nil
 
 		// Check curl certificates
@@ -2023,7 +2023,7 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 
 	case "windows":
 		// Check Windows certificate store
-		cmd := exec.Command("certutil", "-store", "root", "Doxx.net Root CA")
+		cmd := exec.Command("certutil", "-store", "root", "doxx.net Root CA")
 		status["ca_system"] = cmd.Run() == nil
 	}
 
@@ -2086,20 +2086,20 @@ func setupCAandDNS() error {
 	allConfigured, status := checkCAandDNSConfig()
 
 	if allConfigured {
-		fmt.Println("\n✓ All Doxx.net components are properly configured!")
+		fmt.Println("\n✓ All doxx.net components are properly configured!")
 		fmt.Println("No additional setup needed.")
 		return nil
 	}
 
-	fmt.Println("\nDoxx.net Root CA Installation")
+	fmt.Println("\ndoxx.net Root CA Installation")
 	fmt.Println("────────────────────────────")
-	fmt.Println("The Doxx.net Root CA enables secure communication with .doxx domains and")
+	fmt.Println("The doxx.net Root CA enables secure communication with .doxx domains and")
 	fmt.Println("allows users to register their own domains without relying on the public PKI system.")
-	fmt.Println("This is essential for maintaining privacy and security within the Doxx.net network.")
+	fmt.Println("This is essential for maintaining privacy and security within the doxx.net network.")
 	fmt.Println("\nDNS Configuration:")
-	fmt.Println("When connected to Doxx.net, DNS queries are automatically secured through our network.")
+	fmt.Println("When connected to doxx.net, DNS queries are automatically secured through our network.")
 	fmt.Println("We recommend using 1.1.1.1 and 8.8.8.8 as your default DNS servers.")
-	fmt.Println("The Doxx client will automatically redirect DNS traffic to secure Doxx.net servers")
+	fmt.Println("The doxx client will automatically redirect DNS traffic to secure doxx.net servers")
 	fmt.Println("while connected, and restore your original DNS settings when disconnected.")
 
 	fmt.Print("\nWould you like to proceed with installation of missing components? (y/n): ")
@@ -2194,7 +2194,7 @@ func setupCAandDNS() error {
 
 	case "windows":
 		if !status["ca_system"] {
-			fmt.Println("\nTo install the Doxx.net Root CA on Windows:")
+			fmt.Println("\nTo install the doxx.net Root CA on Windows:")
 			fmt.Println("1. Double-click the 'assets/doxx-root-ca.crt' file")
 			fmt.Println("2. Click 'Install Certificate'")
 			fmt.Println("3. Select 'Local Machine' and click 'Next'")
@@ -2210,7 +2210,7 @@ func setupCAandDNS() error {
 	allConfigured, _ = checkCAandDNSConfig()
 	if allConfigured {
 		fmt.Println("\n✓ Installation completed successfully!")
-		fmt.Println("Your system is now configured to use Doxx.net secure DNS services.")
+		fmt.Println("Your system is now configured to use doxx.net secure DNS services.")
 		fmt.Println("Default DNS servers (recommended):")
 		fmt.Println("  Primary:   1.1.1.1    (Cloudflare)")
 		fmt.Println("  Secondary: 8.8.8.8    (Google)")
