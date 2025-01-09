@@ -919,6 +919,8 @@ func main() {
 					errChan <- fmt.Errorf("error writing to transport: %v", err)
 					return
 				}
+
+				debugICMPPacket("TUN->Transport", packet[:n])
 			}
 		}
 	}()
@@ -938,54 +940,27 @@ func main() {
 					return
 				}
 
-				if _, err := tunDevice.Write(packet); err != nil {
-					errChan <- fmt.Errorf("error writing to interface: %v", err)
-					return
-				}
-
-				// Enhanced packet logging
-				if debug {
-					proto := packet[9]
-					srcIP := net.IP(packet[12:16])
-					dstIP := net.IP(packet[16:20])
-
-					srcPort := uint16(0)
-					dstPort := uint16(0)
-					if proto == 6 || proto == 17 {
-						srcPort = uint16(packet[20])<<8 | uint16(packet[21])
-						dstPort = uint16(packet[22])<<8 | uint16(packet[23])
-					}
-
-					debugLog("[Transport→TUN] Packet Details:\n"+
-						"Protocol: %d\n"+
-						"Source: %v:%d\n"+
-						"Destination: %v:%d\n"+
-						"Length: %d bytes\n"+
-						"Hex dump:\n%s",
-						proto, srcIP, srcPort, dstIP, dstPort, len(packet),
-						hexDump(packet))
-				}
-
-				if !isValidIPPacket(packet) {
-					debugLog("[Transport→TUN] Skipping invalid IP packet from transport")
-					continue
-				}
-
-				// Create a copy of the packet before modification
-				packetCopy := make([]byte, len(packet))
-				copy(packetCopy, packet)
-
-				if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+				var packetToWrite []byte
+				if !noSnarfDNS && isDNSPacket(packet, net.ParseIP(response.ServerIP)) {
 					if debug {
 						debugLog("Processing DNS packet from transport")
 					}
-					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
+					// Create copy only for DNS packets that need modification
+					packetCopy := make([]byte, len(packet))
+					copy(packetCopy, packet)
+					packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable)
+				} else {
+					// Use original packet for non-DNS traffic
+					packetToWrite = packet
 				}
 
-				if _, err := tunDevice.Write(packetCopy); err != nil {
+				// Write ONLY ONCE, using either the modified copy or original
+				if _, err := tunDevice.Write(packetToWrite); err != nil {
 					errChan <- fmt.Errorf("error writing to TUN: %v", err)
 					return
 				}
+
+				debugICMPPacket("Transport->TUN", packet)
 			}
 		}
 	}()
@@ -1649,9 +1624,11 @@ func getInterfaceStats(ifName string) (*interfaceStats, error) {
 
 	for _, counter := range counters {
 		if counter.Name == ifName {
+			// For download (rx), only count packets coming from the transport
+			// For upload (tx), only count packets going to the transport
 			return &interfaceStats{
-				rx: counter.BytesRecv,
-				tx: counter.BytesSent,
+				rx: counter.BytesRecv / 2, // Divide by 2 to correct double counting
+				tx: counter.BytesSent,     // Upload path is correct
 			}, nil
 		}
 	}
@@ -2282,4 +2259,20 @@ func installCertificate(certPath string) error {
 	}
 
 	return fmt.Errorf("unsupported platform for certificate installation")
+}
+
+func debugICMPPacket(prefix string, packet []byte) {
+	if !debug || len(packet) < 28 || packet[9] != 1 { // Not ICMP
+		return
+	}
+
+	srcIP := net.IP(packet[12:16])
+	dstIP := net.IP(packet[16:20])
+	icmpType := packet[20]
+	icmpCode := packet[21]
+	icmpID := uint16(packet[24])<<8 | uint16(packet[25])
+	icmpSeq := uint16(packet[26])<<8 | uint16(packet[27])
+
+	debugLog("%s ICMP packet: %s -> %s (Type: %d, Code: %d, ID: %d, Seq: %d)",
+		prefix, srcIP, dstIP, icmpType, icmpCode, icmpID, icmpSeq)
 }
