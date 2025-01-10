@@ -31,6 +31,8 @@ Together, these components provide:
 - Complete isolation from internet-based attacks
 - Granular control over access and permissions
 
+*doxx.net is committed to advancing freedom of speech and open communication through innovative protocol design. By exposing the vulnerabilities and limitations in existing internet infrastructure, I aim to inspire the evolution of protocols that uphold the fundamental principle of unimpeded global connectivity. The internet was conceived as a tool for unrestricted communication, and my work underscores the need to preserve its open nature by breaking through barriers and empowering users to communicate freely, even in the face of censorship or restrictions.*
+
 Currently confirmed to bypass censorship in the following countries:
 - 🇨🇳 China
 - 🇷🇺 Russia
