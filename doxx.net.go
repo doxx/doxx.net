@@ -1177,23 +1177,77 @@ func setupTUN(ifName string, assignedIP string, serverIP string, prefixLen int) 
 			debugLog("Interface IP config:\n%s", output)
 		}
 
-		// Add DNS server configuration
-		dnsCmd := exec.Command("netsh", "interface", "ipv4", "add", "dnsservers",
-			ifName, "1.1.1.1", "index=1")
-		if out, err := dnsCmd.CombinedOutput(); err != nil {
-			debugLog("Warning: Failed to set DNS server: %v\nOutput: %s", err, string(out))
-			// Continue anyway as this is not critical for basic functionality
-		} else {
-			debugLog("Successfully configured DNS server for interface %s", ifName)
+		// Get current DNS servers from primary interface
+		primaryDNS := []string{}
+
+		// Use ipconfig /all to get more reliable DNS information
+		dnsListCmd := exec.Command("ipconfig", "/all")
+		if out, err := dnsListCmd.CombinedOutput(); err == nil {
+			lines := strings.Split(string(out), "\n")
+			currentAdapter := ""
+			foundPrimaryAdapter := false
+
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+
+				// Look for adapter sections
+				if strings.Contains(line, "Ethernet adapter") || strings.Contains(line, "Wireless LAN adapter") {
+					currentAdapter = line
+					// Skip the doxx adapter
+					if strings.Contains(strings.ToLower(line), "doxx") {
+						currentAdapter = ""
+					}
+					continue
+				}
+
+				// Only process if we're in a valid adapter section
+				if currentAdapter == "" {
+					continue
+				}
+
+				// Look for default gateway to identify primary adapter
+				if strings.Contains(line, "Default Gateway") && !strings.HasSuffix(line, ":") {
+					foundPrimaryAdapter = true
+				}
+
+				// If we found the primary adapter, look for its DNS servers
+				if foundPrimaryAdapter && strings.Contains(line, "DNS Servers") {
+					parts := strings.Split(line, ":")
+					if len(parts) == 2 {
+						server := strings.TrimSpace(parts[1])
+						if net.ParseIP(server) != nil && server != "" {
+							primaryDNS = append(primaryDNS, server)
+						}
+					}
+				}
+			}
+
+			if len(primaryDNS) > 0 {
+				debugLog("Found existing DNS servers on primary interface: %v", primaryDNS)
+			}
 		}
 
-		// Add backup DNS server
-		backupDNSCmd := exec.Command("netsh", "interface", "ipv4", "add", "dnsservers",
-			ifName, "8.8.8.8", "index=2")
-		if out, err := backupDNSCmd.CombinedOutput(); err != nil {
-			debugLog("Warning: Failed to set backup DNS server: %v\nOutput: %s", err, string(out))
-		} else {
-			debugLog("Successfully configured backup DNS server for interface %s", ifName)
+		// Only use defaults if we couldn't find any DNS servers
+		if len(primaryDNS) == 0 {
+			primaryDNS = []string{"1.1.1.1"}
+			debugLog("No existing DNS servers found, using default: %v", primaryDNS)
+		}
+
+		// First, remove any existing DNS servers
+		clearDNSCmd := exec.Command("netsh", "interface", "ipv4", "delete", "dnsservers", ifName, "all")
+		if out, err := clearDNSCmd.CombinedOutput(); err != nil {
+			debugLog("Warning: Failed to clear existing DNS servers: %v\nOutput: %s", err, string(out))
+		}
+
+		// Configure DNS servers
+		for i, dns := range primaryDNS {
+			dnsCmd := exec.Command("netsh", "interface", "ipv4", "add", "dnsservers",
+				ifName, dns, fmt.Sprintf("index=%d", i+1))
+			if out, err := dnsCmd.CombinedOutput(); err != nil {
+				debugLog("Warning: Failed to set DNS server %s: %v\nOutput: %s", dns, err, string(out))
+			} else {
+				debugLog("Successfully configured DNS server %s for interface %s", dns, ifName)
+			}
 		}
 
 	case "linux":
