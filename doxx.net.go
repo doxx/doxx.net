@@ -80,13 +80,24 @@ const (
 `
 )
 
+// At package level, declare the variables
 var (
 	debug                 bool
-	snarfDNS              = true // Changed to default true
+	snarfDNS              = true
 	bandwidthDisplayReady = make(chan struct{})
+	bandwidthDisplayInit  sync.Once
 	dnsNatTable           *DNSNatTable
 	dnsBlocker            *DNSBlocker
 	blockBadDNS           bool
+	noAutoReconnect       bool
+	bandwidthStats        *BandwidthStats
+	displayManager        *DisplayManager
+	firstConnect          = true
+)
+
+// Add a channel to control bandwidth monitoring
+var (
+	bandwidthMonitorStop = make(chan struct{})
 )
 
 func init() {
@@ -563,6 +574,23 @@ func cleanup(routeManager *RouteManager, client transport.TransportType, ctx con
 	done := make(chan bool)
 
 	go func() {
+		// Remove resolver file on macOS
+		if runtime.GOOS == "darwin" {
+			debugLog("Removing .doxx resolver configuration...")
+			if err := exec.Command("sudo", "rm", "-f", "/etc/resolver/doxx").Run(); err != nil {
+				debugLog("Warning: Failed to remove resolver configuration: %v", err)
+			} else {
+				// Flush DNS cache and restart mDNSResponder after removal
+				if err := exec.Command("sudo", "dscacheutil", "-flushcache").Run(); err != nil {
+					debugLog("Warning: Failed to flush DNS cache: %v", err)
+				}
+				if err := exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run(); err != nil {
+					debugLog("Warning: Failed to restart mDNSResponder: %v", err)
+				}
+				debugLog("Successfully removed .doxx resolver configuration")
+			}
+		}
+
 		if routeManager != nil {
 			log.Println("Cleaning up routes...")
 			if err := routeManager.Cleanup(); err != nil {
@@ -612,16 +640,10 @@ type DisplayManager struct {
 	mu            sync.Mutex
 	lastBandwidth string
 	lastBlocked   string
+	enabled       bool
 }
 
-// Add these as global variables at the package level
-var (
-	bandwidthStats *BandwidthStats
-	displayManager *DisplayManager
-)
-
-// Remove the existing displayManager declaration since it's now global
-// var displayManager *DisplayManager
+// Remove any other declarations of bandwidthDisplayInit since it's now global
 
 func NewDisplayManager() *DisplayManager {
 	return &DisplayManager{}
@@ -630,6 +652,20 @@ func NewDisplayManager() *DisplayManager {
 func (dm *DisplayManager) Update(bandwidth, blocked string) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
+
+	if !dm.enabled {
+		return
+	}
+
+	// Don't update if both values are empty
+	if bandwidth == "" && blocked == "" {
+		return
+	}
+
+	// Don't overwrite bandwidth with empty value
+	if bandwidth == "" {
+		bandwidth = dm.lastBandwidth
+	}
 
 	// Clear the current line
 	fmt.Print("\r\033[K")
@@ -643,8 +679,73 @@ func (dm *DisplayManager) Update(bandwidth, blocked string) {
 		fmt.Printf("\r🛡️  %s", blocked)
 	}
 
-	dm.lastBandwidth = bandwidth
-	dm.lastBlocked = blocked
+	// Store last known good values
+	if bandwidth != "" {
+		dm.lastBandwidth = bandwidth
+	}
+	if blocked != "" {
+		dm.lastBlocked = blocked
+	}
+}
+
+// Add a function to control bandwidth display
+func toggleBandwidthDisplay(enabled bool) {
+	if displayManager != nil {
+		if !enabled {
+			// Clear the current line
+			fmt.Print("\r\033[K")
+		}
+		displayManager.enabled = enabled
+	}
+}
+
+// Create a separate function for bandwidth monitoring
+func startBandwidthMonitoring(ctx context.Context, tunName string) {
+	// Stop any existing monitoring
+	select {
+	case bandwidthMonitorStop <- struct{}{}:
+	default:
+	}
+
+	go func() {
+		// Use a consistent 2-second interval for smoother updates
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+
+		// Get initial stats
+		initialStats, err := getInterfaceStats(tunName)
+		if err != nil {
+			debugLog("Failed to get initial interface stats: %v", err)
+			return
+		}
+
+		if bandwidthStats != nil {
+			bandwidthStats.mu.Lock()
+			bandwidthStats.lastRx = initialStats.rx
+			bandwidthStats.lastTx = initialStats.tx
+			bandwidthStats.lastUpdate = time.Now()
+			bandwidthStats.mu.Unlock()
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				if displayManager != nil && bandwidthStats != nil {
+					stats, err := getInterfaceStats(tunName)
+					if err != nil {
+						debugLog("Failed to get interface stats: %v", err)
+						continue
+					}
+					bandwidthStats.Update(stats.rx, stats.tx)
+					displayManager.Update(bandwidthStats.GetReadable(), "")
+				}
+			case <-bandwidthMonitorStop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func main() {
@@ -682,6 +783,7 @@ func main() {
 	flag.BoolVar(&noSnarfDNS, "no-snarf-dns", false, "Disable DNS traffic snarfing")
 	flag.BoolVar(&noBandwidth, "no-bandwidth", false, "Disable bandwidth statistics")
 	flag.BoolVar(&blockBadDNS, "block-bad-dns", false, "Block bad DNS traffic")
+	flag.BoolVar(&noAutoReconnect, "no-auto-reconnect", false, "Disable automatic reconnection on failure")
 	flag.Parse()
 
 	if debug {
@@ -771,7 +873,6 @@ func main() {
 	}
 
 	log.Printf("Setting up tunnel device...")
-	// Create platform-specific interface
 	tunDevice, err := createTunDevice("doxx")
 	if err != nil {
 		log.Printf("Failed to create TUN device: %v", err)
@@ -780,341 +881,449 @@ func main() {
 	}
 	defer tunDevice.Close()
 
-	// Create route manager only if routing is enabled
+	// Create route manager ONCE, outside the connection loop
 	var routeManager *RouteManager
 	if !noRouting {
 		routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
 	}
 
-	// Create transport
-	var client transport.TransportType
-	switch vpnType {
-	case "tcp":
-		client = transport.NewSingleTCPClient()
-	case "tcp-encrypted":
-		var initErr error
-		client, initErr = transport.NewSingleTCPEncryptedClient()
-		if initErr != nil {
-			log.Printf("Failed to create encrypted transport: %v", initErr)
-			cleanup(routeManager, nil, ctx)
-			os.Exit(1)
-		}
-	case "https":
-		var proxyConfig *transport.ProxyConfig
-		if proxyURL != "" {
-			proxyConfig, err = transport.ParseProxyURL(proxyURL)
-			if err != nil {
-				log.Printf("Invalid proxy URL: %v", err)
+	// Connection loop
+	retryDelay := time.Second
+	for {
+		// Create transport
+		var client transport.TransportType
+		switch vpnType {
+		case "tcp":
+			client = transport.NewSingleTCPClient()
+		case "tcp-encrypted":
+			var initErr error
+			client, initErr = transport.NewSingleTCPEncryptedClient()
+			if initErr != nil {
+				log.Printf("Failed to create encrypted transport: %v", initErr)
 				cleanup(routeManager, nil, ctx)
 				os.Exit(1)
 			}
-		}
-		client = transport.NewHTTPSTransportClient(proxyConfig)
-	default:
-		log.Printf("Unsupported transport type: %s", vpnType)
-		cleanup(routeManager, nil, ctx)
-		os.Exit(1)
-	}
-
-	// Create a timeout context for initial connection
-	connectCtx, connectCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer connectCancel()
-
-	// Connect using the transport with timeout
-	connChan := make(chan error, 1)
-	go func() {
-		connChan <- client.Connect(serverAddr)
-	}()
-
-	select {
-	case err := <-connChan:
-		if err != nil {
-			log.Printf("Failed to connect: %v", err)
-			cleanup(routeManager, client, ctx)
+		case "https":
+			var proxyConfig *transport.ProxyConfig
+			if proxyURL != "" {
+				proxyConfig, err = transport.ParseProxyURL(proxyURL)
+				if err != nil {
+					log.Printf("Invalid proxy URL: %v", err)
+					cleanup(routeManager, nil, ctx)
+					os.Exit(1)
+				}
+			}
+			client = transport.NewHTTPSTransportClient(proxyConfig)
+		default:
+			log.Printf("Unsupported transport type: %s", vpnType)
+			cleanup(routeManager, nil, ctx)
 			os.Exit(1)
 		}
-	case <-connectCtx.Done():
-		log.Printf("Connection attempt timed out after 15 seconds")
-		cleanup(routeManager, client, ctx)
-		os.Exit(1)
-	case <-sigChan:
-		log.Println("Interrupted during connection attempt")
-		cleanup(routeManager, client, ctx)
-		os.Exit(1)
-	}
 
-	// Send authentication token
-	if err := client.SendAuth(token); err != nil {
-		log.Printf("Failed to send authentication token: %v", err)
-		cleanup(routeManager, client, ctx)
-		os.Exit(1)
-	}
+		// Connect and handle session
+		log.Printf("Connecting to %s...", serverAddr)
 
-	// Handle authentication response
-	response, err := client.HandleAuth()
-	if err != nil {
-		log.Printf("Authentication failed: %v", err)
-		cleanup(routeManager, client, ctx)
-		os.Exit(1)
-	}
-
-	// Validate response
-	if response == nil || response.AssignedIP == "" || response.ServerIP == "" {
-		log.Printf("Invalid response from server: missing IP information")
-		cleanup(routeManager, client, ctx)
-		os.Exit(1)
-	}
-
-	// Setup TUN interface
-	if err := setupTUN(tunDevice.Name(), response.AssignedIP, response.ServerIP, response.PrefixLen); err != nil {
-		log.Printf("Failed to setup TUN interface: %v", err)
-		cleanup(routeManager, client, ctx)
-		os.Exit(1)
-	}
-
-	// Set client and server IPs in route manager
-	if routeManager != nil {
-		routeManager.SetClientIP(response.AssignedIP)
-		routeManager.SetServerIP(response.ServerIP)
-	}
-
-	// Setup routing if enabled
-	if routeManager != nil {
-		if err := routeManager.Setup(serverAddr); err != nil {
-			log.Printf("Failed to setup routing: %v", err)
-			cleanup(routeManager, client, ctx)
-			os.Exit(1)
-		}
-	}
-
-	// Add the helpful information with actual gateway - OS specific only
-	if routeManager != nil {
-		routeManager.mu.Lock()
-		switch runtime.GOOS {
-		case "darwin":
-			log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
-		case "linux":
-			log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
-		case "windows":
-			log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
-		}
-		routeManager.mu.Unlock()
-	}
-
-	// Add debugging/testing information
-	log.Printf("To test connectivity:")
-	log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
-	log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
-	log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
-
-	// Now perform the geo lookup after routes are established
-	performGeoLookup()
-
-	// Add default route after initial connectivity is confirmed
-	if routeManager != nil && !noRouting {
-		debugLog("Setting default route through VPN tunnel")
-		if err := routeManager.setDefaultRoute(tunDevice.Name(), response.ServerIP); err != nil {
-			log.Printf("Warning: Failed to set default route: %v", err)
-			// Don't exit, as the tunnel is still usable without default route
-		}
-	}
-
-	// Create WaitGroup for goroutines
-	var wg sync.WaitGroup
-
-	// Create channels for error handling
-	errChan := make(chan error, 2)
-
-	// Create packet buffer
-	packet := make([]byte, MTU)
-
-	// Create bandwidth stats if enabled
-	if !noBandwidth {
-		bandwidthStats = NewBandwidthStats()
-		displayManager = NewDisplayManager()
-
+		// Add signal handling for connection attempt
+		connErrChan := make(chan error, 1)
 		go func() {
-			select {
-			case <-bandwidthDisplayReady:
-				ticker := time.NewTicker(1 * time.Second)
-				defer ticker.Stop()
-
-				for {
-					select {
-					case <-ticker.C:
-						stats, err := getInterfaceStats(tunDevice.Name())
-						if err != nil {
-							debugLog("Failed to get interface stats: %v", err)
-							continue
-						}
-						bandwidthStats.Update(stats.rx, stats.tx)
-						displayManager.Update(bandwidthStats.GetReadable(), "")
-					case <-ctx.Done():
-						return
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
+			connErrChan <- client.Connect(serverAddr)
 		}()
-	}
 
-	// Initialize DNS NAT table if DNS snarfing is enabled
-	// Add this BEFORE starting the goroutines
-	if !noSnarfDNS {
-		debugLog("Initializing DNS NAT table")
-		dnsNatTable = NewDNSNatTable()
-		if dnsNatTable == nil {
-			log.Fatal("Failed to initialize DNS NAT table")
-		}
-	}
-
-	// TUN to Transport
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := tunDevice.Read(packet)
-				if err != nil {
-					errChan <- fmt.Errorf("error reading from TUN: %v", err)
-					return
-				}
-
-				if n == 0 {
-					continue
-				}
-
-				if !isValidIPPacket(packet[:n]) {
-					debugLog("[TUN→Transport] Skipping invalid IP packet from TUN")
-					continue
-				}
-
-				// Create a copy of the packet before modification
-				packetCopy := make([]byte, n)
-				copy(packetCopy, packet[:n])
-
-				if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
-					if debug {
-						debugLog("Processing DNS packet")
-					}
-					packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
-					// Skip if packet was handled internally (nil return)
-					if packetCopy == nil {
-						continue
-					}
-				}
-
-				if err := client.WritePacket(packetCopy); err != nil {
-					errChan <- fmt.Errorf("error writing to transport: %v", err)
-					return
-				}
-
-				debugICMPPacket("TUN->Transport", packet[:n])
-			}
-		}
-	}()
-
-	// Transport to TUN
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				packet, err := client.ReadPacket()
-				if err != nil {
-					errChan <- fmt.Errorf("error reading from transport: %v", err)
-					return
-				}
-
-				var packetToWrite []byte
-				if !noSnarfDNS && isDNSPacket(packet, net.ParseIP(response.ServerIP)) {
-					if debug {
-						debugLog("Processing DNS packet from transport")
-					}
-					// Create copy only for DNS packets that need modification
-					packetCopy := make([]byte, len(packet))
-					copy(packetCopy, packet)
-					packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
-				} else {
-					// Use original packet for non-DNS traffic
-					packetToWrite = packet
-				}
-
-				// Write ONLY ONCE, using either the modified copy or original
-				if _, err := tunDevice.Write(packetToWrite); err != nil {
-					errChan <- fmt.Errorf("error writing to TUN: %v", err)
-					return
-				}
-
-				debugICMPPacket("Transport->TUN", packet)
-			}
-		}
-	}()
-
-	// Error and signal handling
-	go func() {
 		select {
-		case err := <-errChan:
-			log.Printf("Connection error: %v", err)
-			cleanup(routeManager, client, ctx)
-			cancel() // Cancel context to stop all goroutines
-			os.Exit(1)
+		case err := <-connErrChan:
+			if err != nil {
+				if noAutoReconnect {
+					log.Printf("Connection failed: %v", err)
+					cleanup(routeManager, client, ctx)
+					os.Exit(1)
+				}
+				// Temporarily disable bandwidth display during reconnection
+				toggleBandwidthDisplay(false)
+				log.Printf("Connection failed: %v, retrying in %v...", err, retryDelay)
+
+				// Use timer for retry delay with interrupt handling
+				timer := time.NewTimer(retryDelay)
+				select {
+				case <-timer.C:
+					retryDelay *= 2
+					if retryDelay > time.Minute {
+						retryDelay = time.Minute
+					}
+					continue
+				case <-sigChan:
+					timer.Stop()
+					log.Println("Received interrupt signal")
+					cleanup(routeManager, client, ctx)
+					os.Exit(0)
+				}
+			}
 		case <-sigChan:
 			log.Println("Received interrupt signal")
 			cleanup(routeManager, client, ctx)
-			cancel() // Cancel context to stop all goroutines
-			os.Exit(0)
-		case <-ctx.Done():
-			log.Println("Context cancelled")
-			cleanup(routeManager, client, ctx)
 			os.Exit(0)
 		}
 
-		// Create a timeout context for cleanup
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
+		// Reset delay on successful connection
+		retryDelay = time.Second
 
-		log.Println("Shutting down...")
-
-		// Close connection before cleanup
-		if client != nil {
-			debugLog("Closing transport connection")
+		// Send authentication token
+		if err := client.SendAuth(token); err != nil {
+			log.Printf("Failed to send authentication token: %v, retrying in %v...", err, retryDelay)
 			client.Close()
-		}
-
-		// Only cleanup routing if it was enabled
-		if routeManager != nil && !noRouting {
-			done := make(chan bool)
-			go func() {
-				debugLog("Cleaning up routes")
-				if err := routeManager.Cleanup(); err != nil {
-					log.Printf("Failed to cleanup routes: %v", err)
-				}
-				done <- true
-			}()
-
+			timer := time.NewTimer(retryDelay)
 			select {
-			case <-done:
-				debugLog("Route cleanup completed")
-			case <-cleanupCtx.Done():
-				log.Printf("Route cleanup timed out")
+			case <-timer.C:
+				retryDelay *= 2
+				if retryDelay > time.Minute {
+					retryDelay = time.Minute
+				}
+				continue
+			case <-sigChan:
+				timer.Stop()
+				log.Println("Received interrupt signal")
+				cleanup(routeManager, client, ctx)
+				os.Exit(0)
 			}
 		}
 
-		debugLog("Shutdown complete")
-		os.Exit(0)
-	}()
+		// Handle authentication response
+		response, err := client.HandleAuth()
+		if err != nil {
+			log.Printf("Authentication failed: %v, retrying in %v...", err, retryDelay)
+			client.Close()
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-timer.C:
+				retryDelay *= 2
+				if retryDelay > time.Minute {
+					retryDelay = time.Minute
+				}
+				continue
+			case <-sigChan:
+				timer.Stop()
+				log.Println("Received interrupt signal")
+				cleanup(routeManager, client, ctx)
+				os.Exit(0)
+			}
+		}
 
-	// Wait for goroutines
-	wg.Wait()
-	debugLog("All goroutines completed")
+		// Validate response
+		if response == nil || response.AssignedIP == "" || response.ServerIP == "" {
+			log.Printf("Invalid response from server: missing IP information, retrying in %v...", retryDelay)
+			client.Close()
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-timer.C:
+				retryDelay *= 2
+				if retryDelay > time.Minute {
+					retryDelay = time.Minute
+				}
+				continue
+			case <-sigChan:
+				timer.Stop()
+				log.Println("Received interrupt signal")
+				cleanup(routeManager, client, ctx)
+				os.Exit(0)
+			}
+		}
+
+		// Setup TUN interface
+		if err := setupTUN(tunDevice.Name(), response.AssignedIP, response.ServerIP, response.PrefixLen); err != nil {
+			log.Printf("Failed to setup TUN interface: %v", err)
+			cleanup(routeManager, client, ctx)
+			os.Exit(1)
+		}
+
+		// Set client and server IPs in route manager
+		if routeManager != nil {
+			routeManager.SetClientIP(response.AssignedIP)
+			routeManager.SetServerIP(response.ServerIP)
+		}
+
+		// IMPORTANT: Only store the default gateway on first connection
+		if routeManager != nil && firstConnect {
+			if err := routeManager.Setup(serverAddr); err != nil {
+				log.Printf("Failed to setup routing: %v", err)
+				cleanup(routeManager, client, ctx)
+				os.Exit(1)
+			}
+			firstConnect = false
+		} else if routeManager != nil {
+			// On reconnect, only update the server routes
+			if err := routeManager.updateServerRoutes(serverAddr); err != nil {
+				log.Printf("Failed to update server routes: %v", err)
+				cleanup(routeManager, client, ctx)
+				os.Exit(1)
+			}
+		}
+
+		// Add the helpful information with actual gateway - OS specific only
+		if routeManager != nil {
+			routeManager.mu.Lock()
+			switch runtime.GOOS {
+			case "darwin":
+				log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
+			case "linux":
+				log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
+			case "windows":
+				log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
+			}
+			routeManager.mu.Unlock()
+		}
+
+		// Add debugging/testing information
+		log.Printf("To test connectivity:")
+		log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
+		log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
+		log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
+
+		// Now perform the geo lookup after routes are established
+		performGeoLookup(func() {
+			// Initialize bandwidth display after geo lookup completes
+			bandwidthDisplayInit.Do(func() {
+				close(bandwidthDisplayReady)
+			})
+
+			toggleBandwidthDisplay(true)
+		})
+
+		// Add default route after initial connectivity is confirmed
+		if routeManager != nil && !noRouting {
+			debugLog("Setting default route through VPN tunnel")
+			if err := routeManager.setDefaultRoute(tunDevice.Name(), response.ServerIP); err != nil {
+				log.Printf("Warning: Failed to set default route: %v", err)
+				// Don't exit, as the tunnel is still usable without default route
+			}
+		}
+
+		// Create WaitGroup for goroutines
+		var wg sync.WaitGroup
+
+		// Create channels for error handling
+		errChan := make(chan error, 2)
+
+		// Create packet buffer
+		packet := make([]byte, MTU)
+
+		// In main(), before starting the connection loop, add:
+		if !noBandwidth {
+			bandwidthStats = NewBandwidthStats()
+			displayManager = NewDisplayManager()
+		}
+
+		// Then in the connection handling section:
+		if !noBandwidth {
+			// Create bandwidth stats if enabled
+			if bandwidthStats == nil {
+				bandwidthStats = NewBandwidthStats()
+			}
+			if displayManager == nil {
+				displayManager = NewDisplayManager()
+			}
+
+			// Start the single bandwidth monitoring routine
+			startBandwidthMonitoring(ctx, tunDevice.Name())
+		}
+
+		// Initialize DNS NAT table if DNS snarfing is enabled
+		// Add this BEFORE starting the goroutines
+		if !noSnarfDNS {
+			debugLog("Initializing DNS NAT table")
+			dnsNatTable = NewDNSNatTable()
+			if dnsNatTable == nil {
+				log.Fatal("Failed to initialize DNS NAT table")
+			}
+		}
+
+		// TUN to Transport
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					n, err := tunDevice.Read(packet)
+					if err != nil {
+						errChan <- fmt.Errorf("error reading from TUN: %v", err)
+						return
+					}
+
+					if n == 0 {
+						continue
+					}
+
+					if !isValidIPPacket(packet[:n]) {
+						debugLog("[TUN→Transport] Skipping invalid IP packet from TUN")
+						continue
+					}
+
+					// Create a copy of the packet before modification
+					packetCopy := make([]byte, n)
+					copy(packetCopy, packet[:n])
+
+					if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+						if debug {
+							debugLog("Processing DNS packet")
+						}
+						packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
+						// Skip if packet was handled internally (nil return)
+						if packetCopy == nil {
+							continue
+						}
+					}
+
+					if err := client.WritePacket(packetCopy); err != nil {
+						errChan <- fmt.Errorf("error writing to transport: %v", err)
+						return
+					}
+
+					debugICMPPacket("TUN->Transport", packet[:n])
+				}
+			}
+		}()
+
+		// Transport to TUN
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					packet, err := client.ReadPacket()
+					if err != nil {
+						errChan <- fmt.Errorf("error reading from transport: %v", err)
+						return
+					}
+
+					var packetToWrite []byte
+					if !noSnarfDNS && isDNSPacket(packet, net.ParseIP(response.ServerIP)) {
+						if debug {
+							debugLog("Processing DNS packet from transport")
+						}
+						// Create copy only for DNS packets that need modification
+						packetCopy := make([]byte, len(packet))
+						copy(packetCopy, packet)
+						packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
+					} else {
+						// Use original packet for non-DNS traffic
+						packetToWrite = packet
+					}
+
+					// Write ONLY ONCE, using either the modified copy or original
+					if _, err := tunDevice.Write(packetToWrite); err != nil {
+						errChan <- fmt.Errorf("error writing to TUN: %v", err)
+						return
+					}
+
+					debugICMPPacket("Transport->TUN", packet)
+				}
+			}
+		}()
+
+		// Error and signal handling
+		go func() {
+			for {
+				select {
+				case err := <-errChan:
+					if noAutoReconnect {
+						log.Printf("Connection error: %v", err)
+						cleanup(routeManager, client, ctx)
+						os.Exit(1)
+					}
+
+					// Check for specific connection errors
+					if err != nil {
+						if strings.Contains(err.Error(), "connection reset by peer") ||
+							strings.Contains(err.Error(), "EOF") ||
+							strings.Contains(err.Error(), "broken pipe") {
+							log.Printf("Connection lost: %v, reconnecting in %v...", err, retryDelay)
+						} else {
+							log.Printf("Connection error: %v, reconnecting in %v...", err, retryDelay)
+						}
+					}
+
+					// Close only the client connection, preserve routes
+					if client != nil {
+						client.Close()
+					}
+
+					// Use timer instead of sleep to allow interrupt handling
+					timer := time.NewTimer(retryDelay)
+					select {
+					case <-timer.C:
+						// Timer completed, continue with reconnect
+					case <-sigChan:
+						timer.Stop()
+						log.Println("Received interrupt signal")
+						cleanup(routeManager, client, ctx)
+						os.Exit(0)
+					}
+
+					retryDelay *= 2
+
+					// Maximum retry delay of 1 minute
+					if retryDelay > time.Minute {
+						retryDelay = time.Minute
+					}
+
+					// Create new context for the next connection attempt
+					ctx, cancel = context.WithCancel(context.Background())
+					return
+
+				case <-sigChan:
+					log.Println("Received interrupt signal")
+					cleanup(routeManager, client, ctx)
+					os.Exit(0)
+
+				case <-ctx.Done():
+					// Only do full cleanup if we're not in a reconnection scenario
+					select {
+					case <-errChan:
+						// We're reconnecting, just close the client
+						if client != nil {
+							client.Close()
+						}
+					default:
+						// Normal shutdown
+						log.Println("Context cancelled")
+						cleanup(routeManager, client, ctx)
+						os.Exit(0)
+					}
+				}
+			}
+		}()
+
+		// Wait for goroutines
+		wg.Wait()
+		debugLog("All goroutines completed")
+
+		// Only show connection details on first connect
+		if firstConnect {
+			log.Printf("To test connectivity:")
+			log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
+			log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
+			log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
+
+			// Now perform the geo lookup after routes are established
+			performGeoLookup(func() {
+				// Initialize bandwidth display after geo lookup completes
+				bandwidthDisplayInit.Do(func() {
+					close(bandwidthDisplayReady)
+				})
+
+				toggleBandwidthDisplay(true)
+			})
+
+			firstConnect = false
+		} else {
+			// For reconnects, just enable bandwidth display immediately
+			toggleBandwidthDisplay(true)
+		}
+	}
 }
 
 func setupTUN(ifName string, assignedIP string, serverIP string, prefixLen int) error {
@@ -1801,8 +2010,8 @@ func getInterfaceStats(ifName string) (*interfaceStats, error) {
 	return nil, fmt.Errorf("interface %s not found", ifName)
 }
 
-// Add this function to perform the geo lookup
-func performGeoLookup() {
+// Modify performGeoLookup to take a callback
+func performGeoLookup(onComplete func()) {
 	// Run in a goroutine to not block main execution
 	go func() {
 		// Give more time for routes to stabilize and verify connectivity
@@ -1884,8 +2093,10 @@ func performGeoLookup() {
 		// Print the formatted output
 		fmt.Println(output.String())
 
-		// Signal that it's okay to start bandwidth display
-		close(bandwidthDisplayReady)
+		// Call the completion callback
+		if onComplete != nil {
+			onComplete()
+		}
 	}()
 }
 
@@ -2101,7 +2312,7 @@ func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable, tun
 				if bandwidthStats != nil {
 					bandwidth = bandwidthStats.GetReadable()
 				}
-				displayManager.Update(bandwidth, fmt.Sprintf("Blocked: %s", paddedDomain))
+				displayManager.Update(bandwidth, fmt.Sprintf("Blocked: %s\n", paddedDomain))
 			}
 
 			// Look up the original DNS server from NAT table
@@ -2249,12 +2460,34 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 		_, err := os.Stat("/etc/ssl/certs/doxx-root-ca.crt")
 		status["ca_curl"] = err == nil
 
-		// Check .doxx resolver configuration
-		content, err := os.ReadFile("/etc/resolver/doxx")
-		if err == nil {
-			expected := "domain doxx\nnameserver 1.1.1.1\nsearch_order 1\ntimeout 5\noptions private"
-			status["resolver"] = string(content) == expected
+		// Always write the resolver configuration
+		resolverContent := []byte("domain doxx\nnameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch_order 1\ntimeout 5\noptions private")
+
+		// Create resolver directory if it doesn't exist
+		if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err == nil {
+			// Create temporary file with resolver content
+			if tmpfile, err := os.CreateTemp("", "resolver"); err == nil {
+				defer os.Remove(tmpfile.Name())
+
+				if _, err := tmpfile.Write(resolverContent); err == nil {
+					tmpfile.Close()
+
+					// Copy file to destination using sudo
+					if err := exec.Command("sudo", "cp", tmpfile.Name(), "/etc/resolver/doxx").Run(); err == nil {
+						// Set proper permissions
+						exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run()
+
+						// Flush DNS cache and restart mDNSResponder
+						exec.Command("sudo", "dscacheutil", "-flushcache").Run()
+						exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run()
+					}
+				}
+			}
 		}
+
+		// Check if the file exists now (for status reporting)
+		content, _ := os.ReadFile("/etc/resolver/doxx")
+		status["resolver"] = string(content) == string(resolverContent)
 
 	case "linux":
 		// Check system certificates
@@ -2374,51 +2607,6 @@ func setupCAandDNS() error {
 					"-k", "/Library/Keychains/System.keychain", "assets/doxx-root-ca.crt").Run(); err != nil {
 					return fmt.Errorf("failed to add CA cert to system trust: %v", err)
 				}
-			}
-		}
-
-		// Configure .doxx resolver if needed
-		if !status["resolver"] {
-			fmt.Println("Configuring .doxx domain resolver...")
-
-			// Create resolver directory if it doesn't exist
-			if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err != nil {
-				return fmt.Errorf("failed to create resolver directory: %v", err)
-			}
-
-			// Create temporary file with resolver content
-			resolverContent := []byte("domain doxx\nnameserver 1.1.1.1\nsearch_order 1\ntimeout 5\noptions private")
-			tmpfile, err := os.CreateTemp("", "resolver")
-			if err != nil {
-				return fmt.Errorf("failed to create temporary file: %v", err)
-			}
-			defer os.Remove(tmpfile.Name())
-
-			// Write content to temporary file
-			if _, err := tmpfile.Write(resolverContent); err != nil {
-				return fmt.Errorf("failed to write resolver content: %v", err)
-			}
-			if err := tmpfile.Close(); err != nil {
-				return fmt.Errorf("failed to close temporary file: %v", err)
-			}
-
-			// Copy file to destination using sudo
-			if err := exec.Command("sudo", "cp", tmpfile.Name(), "/etc/resolver/doxx").Run(); err != nil {
-				return fmt.Errorf("failed to copy resolver configuration: %v", err)
-			}
-
-			// Set proper permissions
-			if err := exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run(); err != nil {
-				fmt.Println("Warning: Failed to set resolver file permissions")
-			}
-
-			// Flush DNS cache and restart mDNSResponder
-			fmt.Println("Updating DNS configuration...")
-			if err := exec.Command("sudo", "dscacheutil", "-flushcache").Run(); err != nil {
-				fmt.Println("Warning: Failed to flush DNS cache")
-			}
-			if err := exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run(); err != nil {
-				fmt.Println("Warning: Failed to restart mDNSResponder. You may need to restart your system.")
 			}
 		}
 
@@ -2678,4 +2866,41 @@ func createBlockedDNSResponse(originalPacket []byte, dnsServerIP net.IP) []byte 
 	updateUDPChecksum(response)
 
 	return response
+}
+
+// Add this new method to RouteManager
+func (rm *RouteManager) updateServerRoutes(serverAddr string) error {
+	// Extract hostname/IP from server address
+	host := strings.Split(serverAddr, ":")[0]
+
+	// For Cloudflare-proxied domains, routes are already set up
+	if strings.Contains(serverAddr, "cdn.") && strings.Contains(serverAddr, ".doxx.net") {
+		return nil
+	}
+
+	// Resolve the IP address
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("failed to resolve server address %s: %v", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("no IP addresses found for %s", host)
+	}
+
+	// Add static route for each resolved IP
+	for _, ip := range ips {
+		if ip.To4() != nil { // Only handle IPv4 addresses
+			ipStr := ip.String()
+			debugLog("Adding static route for VPN server %s", ipStr)
+			if err := rm.addStaticRoute(ipStr+"/32", rm.defaultGW, rm.defaultIface); err != nil {
+				return fmt.Errorf("failed to add static route for VPN server IP %s: %v", ipStr, err)
+			}
+			rm.mu.Lock()
+			rm.staticRoutes = append(rm.staticRoutes, ipStr+"/32")
+			rm.serverIPs = append(rm.serverIPs, ip)
+			rm.mu.Unlock()
+		}
+	}
+
+	return nil
 }
