@@ -2219,6 +2219,15 @@ func getInterfaceStats(ifName string) (*interfaceStats, error) {
 
 	for _, counter := range counters {
 		if counter.Name == ifName {
+			// Windows (wintun) reports correct stats, other platforms need adjustment
+			if runtime.GOOS == "windows" {
+				return &interfaceStats{
+					rx: counter.BytesRecv, // Don't divide by 2 on Windows
+					tx: counter.BytesSent,
+				}, nil
+			}
+
+			// For other platforms using water/tun:
 			// For download (rx), only count packets coming from the transport
 			// For upload (tx), only count packets going to the transport
 			return &interfaceStats{
