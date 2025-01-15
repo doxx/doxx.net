@@ -15,14 +15,20 @@ import (
 )
 
 type TunDevice struct {
-	adapter *wintun.Adapter
-	session wintun.Session
-	name    string
+	adapter  *wintun.Adapter
+	session  wintun.Session
+	name     string
+	readBuf  chan []byte   // Buffer channel for reads
+	writeBuf chan []byte   // Buffer channel for writes
+	done     chan struct{} // Channel to signal shutdown
 }
 
 const (
 	WINTUN_DLL          = "wintun.dll"
 	WINTUN_DOWNLOAD_URL = "https://www.wintun.net/"
+	WINTUN_LOG_INFO     = 0
+	WINTUN_LOG_WARN     = 1
+	WINTUN_LOG_ERR      = 2
 )
 
 func createTunDevice(name string) (*TunDevice, error) {
@@ -95,13 +101,13 @@ func createTunDevice(name string) (*TunDevice, error) {
 	}
 
 	debugLog("Starting adapter session")
-	session, err := adapter.StartSession(0x2000000) // 32MB ring buffer (increased from 8MB)
+	session, err := adapter.StartSession(0x4000000) // 64MB ring buffer
 	if err != nil {
 		debugLog("Session start failed: %v", err)
 		adapter.Close()
 		return nil, fmt.Errorf("error starting Wintun session: %v", err)
 	}
-	debugLog("Session started successfully")
+	debugLog("Session started successfully with 64MB buffer")
 
 	// Verify adapter exists in Windows
 	debugLog("Verifying adapter in network interfaces")
@@ -112,123 +118,138 @@ func createTunDevice(name string) (*TunDevice, error) {
 		}
 	}
 
-	return &TunDevice{
-		adapter: adapter,
-		session: session,
-		name:    name,
-	}, nil
+	tun := &TunDevice{
+		adapter:  adapter,
+		session:  session,
+		name:     name,
+		readBuf:  make(chan []byte, 4096), // Increased from 1024
+		writeBuf: make(chan []byte, 4096), // Increased from 1024
+		done:     make(chan struct{}),
+	}
+
+	// Start background workers
+	go tun.readWorker()
+	go tun.writeWorker()
+
+	return tun, nil
+}
+
+func (tun *TunDevice) readWorker() {
+	waitEvent := tun.session.ReadWaitEvent()
+	if waitEvent == 0 {
+		debugLog("[ERROR] Failed to get read wait event")
+		return
+	}
+
+	var stats struct {
+		packets    uint64
+		drops      uint64
+		errors     uint64
+		lastReport time.Time
+	}
+	stats.lastReport = time.Now()
+
+	for {
+		select {
+		case <-tun.done:
+			return
+		default:
+			// Try to receive a packet first
+			data, err := tun.session.ReceivePacket()
+			if err == nil && data != nil {
+				// Successfully got a packet
+				stats.packets++
+				packet := make([]byte, len(data))
+				copy(packet, data)
+
+				// Release the packet BEFORE trying to send it
+				tun.session.ReleaseReceivePacket(data)
+
+				select {
+				case tun.readBuf <- packet:
+					// Successfully buffered
+				default:
+					stats.drops++
+					debugLog("[WARN] Read buffer full, dropping packet")
+				}
+			} else if err == windows.ERROR_NO_MORE_ITEMS {
+				// No more packets, wait for the event
+				result, _ := windows.WaitForSingleObject(windows.Handle(waitEvent), windows.INFINITE)
+				if result != windows.WAIT_OBJECT_0 {
+					debugLog("[ERROR] Wait failed with result: %d (Windows error: %d)",
+						result, windows.GetLastError())
+					stats.errors++
+				}
+			} else {
+				// Some other error occurred
+				debugLog("[ERROR] Read error: %v (Windows error: %d)",
+					err, windows.GetLastError())
+				stats.errors++
+				time.Sleep(time.Millisecond * 100) // Add small delay on error
+			}
+
+			// Print stats every second
+			if time.Since(stats.lastReport) >= time.Second {
+				debugLog("[Stats] Packets: %d/s, Drops: %d/s, Errors: %d/s, Buffer: %d",
+					stats.packets, stats.drops, stats.errors, len(tun.readBuf))
+				stats.packets = 0
+				stats.drops = 0
+				stats.errors = 0
+				stats.lastReport = time.Now()
+			}
+		}
+	}
+}
+
+func (tun *TunDevice) writeWorker() {
+	for {
+		select {
+		case <-tun.done:
+			return
+		case packet := <-tun.writeBuf:
+			for retries := 0; retries < 5; retries++ {
+				buf, err := tun.session.AllocateSendPacket(len(packet))
+				if err == nil {
+					copy(buf, packet)
+					tun.session.SendPacket(buf)
+					break
+				}
+				debugLog("[Transport→TUN] Write error: %v", err)
+				time.Sleep(time.Millisecond * 5)
+			}
+		}
+	}
 }
 
 func (tun *TunDevice) Read(packet []byte) (int, error) {
-	// Add retry logic for packet receiving
-	var data []byte
-	var err error
-
-	for retries := 0; retries < 3; retries++ {
-		data, err = tun.session.ReceivePacket()
-		if err == nil {
-			break
-		}
-
-		if err == windows.ERROR_NO_MORE_ITEMS {
-			return 0, nil
-		}
-
-		// If receive fails, wait briefly before retry
-		debugLog("[TUN→Transport] Receive attempt %d failed: %v", retries+1, err)
-		time.Sleep(time.Millisecond * 10)
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("error receiving from Wintun after retries: %v", err)
-	}
-
-	// Validate packet
-	if len(data) < 20 { // Minimum IP header size
-		debugLog("Received undersized packet: %d bytes", len(data))
+	select {
+	case data := <-tun.readBuf:
+		return copy(packet, data), nil
+	case <-time.After(time.Millisecond * 100):
 		return 0, nil
 	}
-
-	// Copy data to the provided packet buffer
-	n := copy(packet, data)
-	return n, nil
 }
 
 func (tun *TunDevice) Write(packet []byte) (int, error) {
-	size := len(packet)
-
-	// Basic validation
-	if size == 0 {
-		debugLog("[Transport→TUN] Skipping zero-length packet")
+	if len(packet) == 0 {
 		return 0, nil
 	}
 
-	// Detailed logging for large packets
-	if size > 1500 {
-		debugLog("[Transport→TUN] Large packet detected: %d bytes", size)
-	}
-
-	// Implement exponential backoff for buffer allocation
-	var buf []byte
-	var err error
-	maxRetries := 5
-	baseDelay := time.Millisecond * 20
-
-	for retry := 0; retry < maxRetries; retry++ {
-		buf, err = tun.session.AllocateSendPacket(size)
-		if err == nil {
-			break
-		}
-
-		// Calculate backoff delay
-		delay := baseDelay * time.Duration(1<<uint(retry))
-		debugLog("[Transport→TUN] Buffer allocation attempt %d failed: %v, waiting %v",
-			retry+1, err, delay)
-
-		// Check for specific error conditions
-		if err == windows.ERROR_BUFFER_OVERFLOW {
-			debugLog("[Transport→TUN] Buffer overflow detected, possible bandwidth issue")
-		}
-
-		time.Sleep(delay)
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to allocate send buffer after %d retries: %v", maxRetries, err)
-	}
-
-	// Copy packet data to the allocated buffer
+	// Make a copy of the packet
+	buf := make([]byte, len(packet))
 	copy(buf, packet)
 
-	// Send with recovery for panic conditions
-	success := false
-	for retry := 0; retry < 3 && !success; retry++ {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					debugLog("[Transport→TUN] Recovered from panic in SendPacket: %v", r)
-					err = fmt.Errorf("panic in SendPacket: %v", r)
-				}
-			}()
-
-			tun.session.SendPacket(buf)
-			success = true
-			err = nil
-		}()
-
-		if !success {
-			time.Sleep(time.Millisecond * 10)
-		}
+	select {
+	case tun.writeBuf <- buf:
+		return len(packet), nil
+	case <-time.After(time.Millisecond * 100):
+		debugLog("[Transport→TUN] Write buffer full")
+		return 0, fmt.Errorf("write buffer full")
 	}
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to send packet after retries: %v", err)
-	}
-
-	return size, nil
 }
 
 func (tun *TunDevice) Close() error {
+	close(tun.done)
 	if tun.adapter != nil {
 		tun.session.End()
 		tun.adapter.Close()
