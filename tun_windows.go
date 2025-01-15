@@ -154,38 +154,43 @@ func (tun *TunDevice) readWorker() {
 		case <-tun.done:
 			return
 		default:
-			// Try to receive a packet first
-			data, err := tun.session.ReceivePacket()
-			if err == nil && data != nil {
-				// Successfully got a packet
-				stats.packets++
-				packet := make([]byte, len(data))
-				copy(packet, data)
-
-				// Release the packet BEFORE trying to send it
-				tun.session.ReleaseReceivePacket(data)
-
-				select {
-				case tun.readBuf <- packet:
-					// Successfully buffered
-				default:
-					stats.drops++
-					debugLog("[WARN] Read buffer full, dropping packet")
-				}
-			} else if err == windows.ERROR_NO_MORE_ITEMS {
-				// No more packets, wait for the event
-				result, _ := windows.WaitForSingleObject(windows.Handle(waitEvent), windows.INFINITE)
-				if result != windows.WAIT_OBJECT_0 {
-					debugLog("[ERROR] Wait failed with result: %d (Windows error: %d)",
-						result, windows.GetLastError())
-					stats.errors++
-				}
-			} else {
-				// Some other error occurred
-				debugLog("[ERROR] Read error: %v (Windows error: %d)",
-					err, windows.GetLastError())
+			// Wait for data to be available
+			result, _ := windows.WaitForSingleObject(windows.Handle(waitEvent), windows.INFINITE)
+			if result != windows.WAIT_OBJECT_0 {
+				debugLog("[ERROR] Wait failed with result: %d (Windows error: %d)",
+					result, windows.GetLastError())
 				stats.errors++
-				time.Sleep(time.Millisecond * 100) // Add small delay on error
+				continue
+			}
+
+			// Process all available packets
+			for {
+				data, err := tun.session.ReceivePacket()
+				if err == windows.ERROR_NO_MORE_ITEMS {
+					break // No more packets, go back to waiting
+				}
+				if err != nil {
+					debugLog("[ERROR] Read error: %v (Windows error: %d)",
+						err, windows.GetLastError())
+					stats.errors++
+					break
+				}
+				if len(data) > 0 {
+					stats.packets++
+					packet := make([]byte, len(data))
+					copy(packet, data)
+
+					// Release the packet BEFORE trying to send it
+					tun.session.ReleaseReceivePacket(data)
+
+					select {
+					case tun.readBuf <- packet:
+						// Successfully buffered
+					default:
+						stats.drops++
+						debugLog("[WARN] Read buffer full, dropping packet")
+					}
+				}
 			}
 
 			// Print stats every second
