@@ -52,6 +52,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -82,19 +84,21 @@ const (
 
 // At package level, declare the variables
 var (
-	debug                 bool
-	snarfDNS              = true
-	bandwidthDisplayReady = make(chan struct{})
-	bandwidthDisplayInit  sync.Once
-	dnsNatTable           *DNSNatTable
-	dnsBlocker            *DNSBlocker
-	blockBadDNS           bool
-	noAutoReconnect       bool
-	bandwidthStats        *BandwidthStats
-	displayManager        *DisplayManager
-	firstConnect          = true
-	lastResolvedServerIP  string
-	originalServerHost    string
+	debug                   bool
+	snarfDNS                = true
+	bandwidthDisplayReady   = make(chan struct{})
+	bandwidthDisplayInit    sync.Once
+	dnsNatTable             *DNSNatTable
+	dnsBlocker              *DNSBlocker
+	blockBadDNS             bool
+	noAutoReconnect         bool
+	bandwidthStats          *BandwidthStats
+	displayManager          *DisplayManager
+	firstConnect            = true
+	lastResolvedServerIP    string
+	originalServerHost      string
+	backbone                bool
+	connectionInfoDisplayed = false // Add this new variable
 )
 
 // Add a channel to control bandwidth monitoring
@@ -394,22 +398,59 @@ func NewSingleTCPTransport() *SingleTCPTransport {
 }
 
 func (t *SingleTCPTransport) Connect(serverAddr string) error {
+	// If we have a cached IP and this isn't our first connect, use it directly
+	connectAddr := serverAddr
+	if lastResolvedServerIP != "" && !firstConnect {
+		host, port, err := net.SplitHostPort(serverAddr)
+		if err != nil {
+			return fmt.Errorf("invalid server address format: %v", err)
+		}
+		connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
+		debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
+	} else {
+		// For initial connection, resolve and cache the IP
+		host, port, err := net.SplitHostPort(serverAddr)
+		if err != nil {
+			return fmt.Errorf("invalid server address format: %v", err)
+		}
+
+		// Only perform DNS resolution on first connect
+		if firstConnect && net.ParseIP(host) == nil {
+			ips, err := net.LookupIP(host)
+			if err != nil {
+				return fmt.Errorf("failed to resolve %s: %v", host, err)
+			}
+
+			// Find first IPv4 address
+			for _, ip := range ips {
+				if ip.To4() != nil {
+					lastResolvedServerIP = ip.String()
+					connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
+					debugLog("Resolved and cached server IP: %s for host: %s", lastResolvedServerIP, host)
+					break
+				}
+			}
+
+			if lastResolvedServerIP == "" {
+				return fmt.Errorf("no IPv4 addresses found for %s", host)
+			}
+		}
+	}
+
 	// Set a reasonable timeout for the initial connection
 	dialer := net.Dialer{
 		Timeout: 10 * time.Second,
 	}
 
-	conn, err := dialer.Dial("tcp", serverAddr)
+	conn, err := dialer.Dial("tcp", connectAddr)
 	if err != nil {
 		switch {
-		case strings.Contains(err.Error(), "no such host"):
-			return fmt.Errorf("cannot resolve %s - please check your DNS settings or internet connection", serverAddr)
 		case strings.Contains(err.Error(), "connection refused"):
-			return fmt.Errorf("connection refused to %s - please verify the server is running and accessible", serverAddr)
+			return fmt.Errorf("connection refused to %s - server may be down", connectAddr)
 		case strings.Contains(err.Error(), "i/o timeout"):
-			return fmt.Errorf("connection timed out - please check your internet connection and firewall settings")
+			return fmt.Errorf("connection timed out to %s - check network connectivity", connectAddr)
 		case strings.Contains(err.Error(), "network is unreachable"):
-			return fmt.Errorf("network is unreachable - please check your network connection and default gateway")
+			return fmt.Errorf("network is unreachable - check network connection")
 		default:
 			return fmt.Errorf("connection failed: %v", err)
 		}
@@ -766,7 +807,29 @@ func startBandwidthMonitoring(ctx context.Context, tunName string) {
 	}()
 }
 
+// Add this function near the top of the file
+func ensureHomeEnv() {
+	if os.Getenv("HOME") == "" {
+		// Set HOME to a reasonable default based on the user running the process
+		currentUser, err := user.Current()
+		if err == nil {
+			os.Setenv("HOME", currentUser.HomeDir)
+		} else {
+			// Fallback to /root if running as root, or /tmp if not
+			if os.Geteuid() == 0 {
+				os.Setenv("HOME", "/root")
+			} else {
+				os.Setenv("HOME", "/tmp")
+			}
+		}
+		debugLog("Set HOME environment variable to: %s", os.Getenv("HOME"))
+	}
+}
+
 func main() {
+	// Ensure HOME env is set before any operations
+	ensureHomeEnv()
+
 	var (
 		serverAddr  string
 		token       string
@@ -802,6 +865,7 @@ func main() {
 	flag.BoolVar(&noBandwidth, "no-bandwidth", false, "Disable bandwidth statistics")
 	flag.BoolVar(&blockBadDNS, "block-bad-dns", false, "Block bad DNS traffic")
 	flag.BoolVar(&noAutoReconnect, "no-auto-reconnect", false, "Disable automatic reconnection on failure")
+	flag.BoolVar(&backbone, "backbone", false, "Enable backbone routing (10.0.0.0/8)") // Add this line
 	flag.Parse()
 
 	if debug {
@@ -899,10 +963,14 @@ func main() {
 	}
 	defer tunDevice.Close()
 
-	// Create route manager ONCE, outside the connection loop
+	// First, ensure routeManager is properly initialized before use
 	var routeManager *RouteManager
 	if !noRouting {
+		debugLog("Initializing route manager...")
 		routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
+		if routeManager == nil {
+			log.Fatal("Failed to initialize route manager")
+		}
 	}
 
 	// Connection loop
@@ -919,8 +987,9 @@ func main() {
 				host, port, _ := net.SplitHostPort(serverAddr)
 				connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
 				debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
+			} else {
+				debugLog("No cached IP available or first connect, using original address: %s", serverAddr)
 			}
-
 			if err := client.Connect(connectAddr); err != nil {
 				if noAutoReconnect {
 					log.Printf("Connection failed: %v", err)
@@ -955,6 +1024,41 @@ func main() {
 				cleanup(routeManager, nil, ctx)
 				os.Exit(1)
 			}
+			// Add the same IP caching logic for tcp-encrypted
+			connectAddr := serverAddr
+			if lastResolvedServerIP != "" && !firstConnect {
+				host, port, _ := net.SplitHostPort(serverAddr)
+				connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
+				debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
+			} else {
+				debugLog("No cached IP available or first connect, using original address: %s", serverAddr)
+			}
+			if err := client.Connect(connectAddr); err != nil {
+				if noAutoReconnect {
+					log.Printf("Connection failed: %v", err)
+					cleanup(routeManager, nil, ctx)
+					os.Exit(1)
+				}
+				// Temporarily disable bandwidth display during reconnection
+				toggleBandwidthDisplay(false)
+				log.Printf("Connection failed: %v, retrying in %v...", err, retryDelay)
+
+				// Use timer for retry delay with interrupt handling
+				timer := time.NewTimer(retryDelay)
+				select {
+				case <-timer.C:
+					retryDelay *= 2
+					if retryDelay > time.Minute {
+						retryDelay = time.Minute
+					}
+					continue
+				case <-sigChan:
+					timer.Stop()
+					log.Println("Received interrupt signal")
+					cleanup(routeManager, client, ctx)
+					os.Exit(0)
+				}
+			}
 		case "https":
 			var proxyConfig *transport.ProxyConfig
 			if proxyURL != "" {
@@ -966,6 +1070,41 @@ func main() {
 				}
 			}
 			client = transport.NewHTTPSTransportClient(proxyConfig)
+			// Add IP caching logic for HTTPS
+			connectAddr := serverAddr
+			if lastResolvedServerIP != "" && !firstConnect {
+				host, port, _ := net.SplitHostPort(serverAddr)
+				connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
+				debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
+			} else {
+				debugLog("No cached IP available or first connect, using original address: %s", serverAddr)
+			}
+			if err := client.Connect(connectAddr); err != nil {
+				if noAutoReconnect {
+					log.Printf("Connection failed: %v", err)
+					cleanup(routeManager, nil, ctx)
+					os.Exit(1)
+				}
+				// Temporarily disable bandwidth display during reconnection
+				toggleBandwidthDisplay(false)
+				log.Printf("Connection failed: %v, retrying in %v...", err, retryDelay)
+
+				// Use timer for retry delay with interrupt handling
+				timer := time.NewTimer(retryDelay)
+				select {
+				case <-timer.C:
+					retryDelay *= 2
+					if retryDelay > time.Minute {
+						retryDelay = time.Minute
+					}
+					continue
+				case <-sigChan:
+					timer.Stop()
+					log.Println("Received interrupt signal")
+					cleanup(routeManager, client, ctx)
+					os.Exit(0)
+				}
+			}
 		default:
 			log.Printf("Unsupported transport type: %s", vpnType)
 			cleanup(routeManager, nil, ctx)
@@ -1108,26 +1247,45 @@ func main() {
 				os.Exit(1)
 			}
 		}
-
-		// Add the helpful information with actual gateway - OS specific only
-		if routeManager != nil {
-			routeManager.mu.Lock()
-			switch runtime.GOOS {
-			case "darwin":
-				log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
-			case "linux":
-				log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
-			case "windows":
-				log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
+		// Add the backbone route here
+		if backbone {
+			// Initialize RouteManager just for backbone if it doesn't exist
+			if routeManager == nil {
+				debugLog("Initializing route manager for backbone routing")
+				routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
 			}
-			routeManager.mu.Unlock()
+
+			debugLog("Setting up backbone route 10.0.0.0/8 via %s", response.ServerIP)
+			if err := routeManager.addStaticRoute("10.0.0.0/8", response.ServerIP, tunDevice.Name()); err != nil {
+				log.Printf("Warning: Failed to add backbone route: %v", err)
+				// Continue execution as this is not critical
+			} else {
+				log.Printf("Successfully added backbone route 10.0.0.0/8 via %s", response.ServerIP)
+			}
 		}
 
-		// Add debugging/testing information
-		log.Printf("To test connectivity:")
-		log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
-		log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
-		log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
+		// Add the helpful information with actual gateway - OS specific only
+		if !connectionInfoDisplayed {
+			if routeManager != nil {
+				routeManager.mu.Lock()
+				switch runtime.GOOS {
+				case "darwin":
+					log.Printf("If needed, restore default route with: sudo route -n add default %s", routeManager.defaultGW)
+				case "linux":
+					log.Printf("If needed, restore default route with: sudo ip route add default via %s dev %s", routeManager.defaultGW, routeManager.defaultIface)
+				case "windows":
+					log.Printf("If needed, restore default route with: route ADD 0.0.0.0 MASK 0.0.0.0 %s", routeManager.defaultGW)
+				}
+				routeManager.mu.Unlock()
+
+				// Add debugging/testing information
+				log.Printf("To test connectivity:")
+				log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
+				log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
+				log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
+			}
+			connectionInfoDisplayed = true // Set this to true after displaying
+		}
 
 		// Now perform the geo lookup after routes are established
 		performGeoLookup(func() {
@@ -1287,15 +1445,24 @@ func main() {
 						os.Exit(1)
 					}
 
-					// Check for specific connection errors
-					if err != nil {
-						if strings.Contains(err.Error(), "connection reset by peer") ||
-							strings.Contains(err.Error(), "EOF") ||
-							strings.Contains(err.Error(), "broken pipe") {
-							log.Printf("Connection lost: %v, reconnecting in %v...", err, retryDelay)
-						} else {
-							log.Printf("Connection error: %v, reconnecting in %v...", err, retryDelay)
-						}
+					// Temporarily disable bandwidth display
+					toggleBandwidthDisplay(false)
+
+					// Clear the current line and move cursor to beginning
+					fmt.Print("\r\033[K")
+
+					// Format the reconnection message based on error type
+					switch {
+					case strings.Contains(err.Error(), "EOF"):
+						log.Printf("Connection lost - attempting to reconnect in %v...", retryDelay)
+					case strings.Contains(err.Error(), "connection refused"):
+						log.Printf("Server unavailable - retrying in %v...", retryDelay)
+					case strings.Contains(err.Error(), "i/o timeout"):
+						log.Printf("Connection timed out - retrying in %v...", retryDelay)
+					case strings.Contains(err.Error(), "connection reset by peer"):
+						log.Printf("Connection reset - attempting to reconnect in %v...", retryDelay)
+					default:
+						log.Printf("Connection error - retrying in %v... (%v)", retryDelay, err)
 					}
 
 					// Close only the client connection, preserve routes
@@ -1308,6 +1475,9 @@ func main() {
 					select {
 					case <-timer.C:
 						// Timer completed, continue with reconnect
+						if !connectionInfoDisplayed {
+							log.Printf("Connecting to %s...", originalServerHost)
+						}
 					case <-sigChan:
 						timer.Stop()
 						log.Println("Received interrupt signal")
@@ -1316,8 +1486,6 @@ func main() {
 					}
 
 					retryDelay *= 2
-
-					// Maximum retry delay of 1 minute
 					if retryDelay > time.Minute {
 						retryDelay = time.Minute
 					}
@@ -1640,6 +1808,7 @@ func readPacket(conn net.Conn) ([]byte, error) {
 }
 
 func (rm *RouteManager) getCurrentDefaultRoute() (string, string, error) {
+
 	// Get default gateway IP
 	gw, err := gateway.DiscoverGateway()
 	if err != nil {
@@ -2542,13 +2711,30 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 		status["resolver"] = string(content) == string(resolverContent)
 
 	case "linux":
-		// Check system certificates
-		_, err := os.Stat("/etc/ssl/certs/doxx-root-ca.crt")
-		status["ca_system"] = err == nil
+		// Check system certificates - look in multiple locations
+		certLocations := []string{
+			"/usr/local/share/ca-certificates/doxx-root-ca.crt",
+			"/etc/ssl/certs/doxx-root-ca.pem",
+			"/etc/ssl/certs/doxx-root-ca.crt", // Added comma here
+		}
 
-		// Check if cert is in the hash directory
+		for _, loc := range certLocations {
+			if _, err := os.Stat(loc); err == nil {
+				status["ca_system"] = true
+				break
+			}
+		}
+
+		// Check if cert is in the hash directory (this is working already)
 		hashCmd := exec.Command("sh", "-c", "ls /etc/ssl/certs | grep -i doxx")
 		status["ca_hash"] = hashCmd.Run() == nil
+
+		// If we have hash links but not the main cert, something's wrong
+		if status["ca_hash"] && !status["ca_system"] {
+			debugLog("Warning: Found hash links but main certificate is missing")
+			// Consider both true if we at least have the hash links
+			status["ca_system"] = true
+		}
 
 	case "windows":
 		// Check Windows certificate store
@@ -2611,6 +2797,9 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 }
 
 func setupCAandDNS() error {
+	// Ensure HOME env is set before certificate operations
+	ensureHomeEnv()
+
 	// Get the status without printing it again
 	allConfigured, status := checkCAandDNSConfig()
 
@@ -2663,17 +2852,40 @@ func setupCAandDNS() error {
 		}
 
 	case "linux":
-		if !status["ca_system"] {
-			fmt.Println("Installing Root CA...")
-			if err := exec.Command("sudo", "mkdir", "-p", "/etc/ssl/certs").Run(); err != nil {
-				return fmt.Errorf("failed to create cert directory: %v", err)
-			}
-			if err := exec.Command("sudo", "cp", "assets/doxx-root-ca.crt", "/etc/ssl/certs/").Run(); err != nil {
-				return fmt.Errorf("failed to copy CA cert: %v", err)
-			}
-			if err := exec.Command("sudo", "update-ca-certificates").Run(); err != nil {
-				return fmt.Errorf("failed to update CA certificates: %v", err)
-			}
+		// Check for CA support
+		if _, err := exec.LookPath("update-ca-certificates"); err != nil {
+			log.Printf("Note: CA certificate management not available. To enable:")
+			log.Printf("  1. Install ca-certificates: sudo apt-get install ca-certificates")
+			log.Printf("  2. Restart the VPN client")
+			log.Printf("Continuing without CA installation...")
+			return nil
+		}
+
+		// Determine the CA directory
+		caDir := "/usr/local/share/ca-certificates"
+		if _, err := os.Stat(caDir); err != nil {
+			log.Printf("Warning: CA directory %s not found", caDir)
+			log.Printf("Continuing without CA installation...")
+			return nil
+		}
+
+		// Write CA file with .crt extension for Debian/Ubuntu
+		caPath := filepath.Join(caDir, "doxx-root-ca.crt")
+		if err := os.WriteFile(caPath, []byte(ROOT_CA_CERT), 0644); err != nil {
+			log.Printf("Warning: Failed to write CA file: %v", err)
+			log.Printf("Continuing without CA installation...")
+			return nil
+		}
+
+		// Update CA trust store
+		updateCmd := exec.Command("sudo", "update-ca-certificates", "--fresh")
+		if out, err := updateCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to update CA trust store: %v\nOutput: %s", err, string(out))
+			log.Printf("To manually install the CA certificate:")
+			log.Printf("  1. Save the CA certificate to /usr/local/share/ca-certificates/doxx-root-ca.crt")
+			log.Printf("  2. Run: sudo update-ca-certificates")
+			log.Printf("Continuing without CA installation...")
+			return nil
 		}
 
 	case "windows":
@@ -2956,3 +3168,37 @@ func (rm *RouteManager) updateServerRoutes(serverAddr string) error {
 
 	return nil
 }
+
+const ROOT_CA_CERT = `-----BEGIN CERTIFICATE-----
+MIIFpTCCA42gAwIBAgIUJtHt5hGGalwlLfHF99PT+Xf1L9gwDQYJKoZIhvcNAQEL
+BQAwYjELMAkGA1UEBhMCVVMxDjAMBgNVBAgMBVN0YXRlMQ0wCwYDVQQHDARDaXR5
+MRkwFwYDVQQKDBBkb3h4Lm5ldCByb290IENBMRkwFwYDVQQDDBBkb3h4Lm5ldCBy
+b290IENBMB4XDTI1MDEwNzE2MzQyMFoXDTM1MDEwNTE2MzQyMFowYjELMAkGA1UE
+BhMCVVMxDjAMBgNVBAgMBVN0YXRlMQ0wCwYDVQQHDARDaXR5MRkwFwYDVQQKDBBk
+b3h4Lm5ldCByb290IENBMRkwFwYDVQQDDBBkb3h4Lm5ldCByb290IENBMIICIjAN
+BgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr6sF+5c9t2sXHLFx/IFdmUaPFL97
+xvEwsL4DB4nHrEahCr/PCkRjmYyWIl47YDIvm3oprgY9NMqV4znxOiHw+iZXs/Q5
+jbZqKGIFp91iqNtq5e5vmXcv1mt0Swxc9YBjHTvpXxXVOKQERo0Hg43zJ6A1OFpD
+vaeOO3VtPds5WvVXMn0yE0nanJyFsC4VZJTRl4A2Wat4K0Gg8Q7HlBEsYUC6yoEr
+m/RCxf4vz+hJeOx5VgeH67ypWKNAt3RmA/wPuUF3Z5oWZUTU98hU+1zVpKckrX9R
+ALiSJ9VCH/P3YtKkxudnD+tV8MIQe3vLbO6ukr9VRkWrQmIh5LVSpVqi5EoK4Tkq
+z83y69znUEecaqDFWRVJHWHs5XFIFZWi/xR8CF+Hac47Lrt9DfKG/4OEhkdYApXn
+r5FIxLO4aMO8GTXNzGWBshfsAlBevjhHCAUt+hVR137k2maWH7ABbT69NIWEJKhN
+NuopK2xRhGy5v3vysewD99EHXOEo8pVwr2I3v6JlccdJ6Fw2GeAWoEe8hCbCvBQ/
+ONEY5EJ04zd/01feM5w35P/jaWX7CNGf88Qq6gtHC0iawFCwGizEGpckZyNGL94O
+VXUmlWg9UyKssE0e0nD2liQzE/4HPfQqd2sD5HZypJVDWwgzYlzxjUKnuCsJhdKs
+mgy46jH83z1EN4sCAwEAAaNTMFEwHQYDVR0OBBYEFH/Ox+raqXKl9lUuC12pxKu5
+qeA8MB8GA1UdIwQYMBaAFH/Ox+raqXKl9lUuC12pxKu5qeA8MA8GA1UdEwEB/wQF
+MAMBAf8wDQYJKoZIhvcNAQELBQADggIBAJaFD4A+RcgJHCp/rxkRMKQxLKEwrHNg
+9GeTYVibLgGt4j3/i+tSmIQcTaTKJ/od8x1VzdV5x9JCupH4+zRO1f3wQtyOZj87
+MGt39vK4j6AepU9CvKQu+0Dam2ZPCCunQvJrH71HxXhOyi6/peZwsbtoXSxUoFnS
+/h7cevPqf8BraXtXrRJvdrmZKxzqX4RaSwAao/hpe3Ko17GoBz3tXARDGiF2dYNo
+5b051PYurh7h8Kb/kdz9RXdtVtYvVZENCFeybsDRFzwd/SFUIDcPCF3D1GOttWI2
+K9HZ+IJJjwUfn9KD4maIbdx5KSWeDuP3rkcn3iK8I4xxefqdSixjIjhfl2ElK1VC
+2vJbSLPikgSevsOghoG3oKYmbaksLeGNtoH0tsm4Z9MWfxudHQhv8j1h9yPuY9fV
+TLryNXsgLfwvSWZ1VYpRQwLo0Cox+mpnYJALp7ATDBrAjnFd8XFoU/tZ8HybNHlv
+KqR+rTiYkByK6c0IdUu1rqrCwdCZSkmR/TKRPdlpO1WU7cPw/oeTicveN6MntuhI
+IYJwiIr/PAbTc/Jp991L7i2b+AJ+3p8tsZmOllX65NDDIdEPG8HzgXIvXtRvg+Yz
+EsXe6db9nRe0+VqmiJ5RDMwv07xFcRdEMcoKmSg4ZlwpJIeNASn/JyiusssiGJ4k
+I1XgeBmJwVJi
+-----END CERTIFICATE-----`
