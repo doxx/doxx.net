@@ -57,20 +57,35 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+var (
+	debugEnabled bool
+)
+
+func debugLogc(format string, args ...interface{}) {
+	if debugEnabled {
+		log.Printf("[HTTPS Client Debug] "+format, args...)
+	}
+}
+
+func SetDebug(enabled bool) {
+	debugEnabled = enabled
+}
+
 type HTTPSTransportClient struct {
-	client         *http.Client
-	serverURL      string
-	sessionID      string
-	readBuffer     []byte
-	bufferMutex    sync.Mutex
-	pollInterval   time.Duration
-	currentBatch   int // Track number of packets in current batch
-	writeBuffer    []byte
-	writeBufferMux sync.Mutex
-	maxBatchSize   int
-	batchTimeout   time.Duration
-	lastWrite      time.Time
-	fastPath       bool // New field for latency-sensitive packets
+	client           *http.Client
+	serverURL        string
+	sessionID        string
+	readBuffer       []byte
+	bufferMutex      sync.Mutex
+	pollInterval     time.Duration
+	currentBatch     int // Track number of packets in current batch
+	writeBuffer      []byte
+	writeBufferMux   sync.Mutex
+	maxBatchSize     int
+	batchTimeout     time.Duration
+	lastWrite        time.Time
+	fastPath         bool // New field for latency-sensitive packets
+	originalHostname string
 }
 
 type ProxyConfig struct {
@@ -139,56 +154,58 @@ func NewHTTPSTransportClient(proxyConfig *ProxyConfig) TransportType {
 	}
 }
 
-func (t *HTTPSTransportClient) Connect(serverAddr string) error {
-	// Keep original server address for TLS hostname verification
-	originalHost := strings.Split(serverAddr, ":")[0]
-	port := strings.Split(serverAddr, ":")[1]
-
-	// Resolve IPv4 addresses only
-	ips, err := net.LookupIP(originalHost)
+func (t *HTTPSTransportClient) Connect(addr string) error {
+	// Store the original hostname for TLS verification and Host header
+	hostname, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("failed to resolve host: %v", err)
+		return fmt.Errorf("invalid address format: %v", err)
 	}
 
-	// Filter for IPv4 addresses only
-	var ipv4s []string
-	for _, ip := range ips {
-		if ip.To4() != nil { // This will be nil for IPv6 addresses
-			ipv4s = append(ipv4s, ip.String())
+	// If this is an IP address, we need to use the original hostname for SNI
+	ip := net.ParseIP(hostname)
+	if ip != nil {
+		// Use the stored original hostname instead of the IP
+		if t.originalHostname == "" {
+			return fmt.Errorf("no hostname available for SNI")
 		}
+		debugLogc("[HTTPS Client] Connecting to IP: %s:%s with SNI hostname: %s", hostname, port, t.originalHostname)
+	} else {
+		// Store the hostname for later use with IP connections
+		t.originalHostname = hostname
+		// Use the provided address directly - no DNS lookup
+		debugLogc("[HTTPS Client] Using provided address: %s:%s", hostname, port)
 	}
 
-	if len(ipv4s) == 0 {
-		return fmt.Errorf("no IPv4 addresses found for host: %s", originalHost)
-	}
+	// Configure transport with custom TLS config that includes ServerName
+	tlsConfig := setupTLSConfig()
+	tlsConfig.ServerName = t.originalHostname
+	debugLogc("[HTTPS Client] Set TLS ServerName to: %s", t.originalHostname)
 
-	tr := &http.Transport{
-		TLSClientConfig: setupTLSConfig(),
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// Use the resolved IP but keep the original port
-			return net.Dial(network, fmt.Sprintf("%s:%s", ipv4s[0], port))
-		},
-	}
-
-	// Create client with CheckRedirect function that prevents following redirects
 	t.client = &http.Client{
-		Transport: tr,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+			// Don't follow redirects
+			Proxy: nil,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	// Use the original hostname in the URL
-	t.serverURL = fmt.Sprintf("https://%s", serverAddr)
+	// Use the provided address with port for the connection URL
+	t.serverURL = fmt.Sprintf("https://%s:%s", hostname, port)
+	debugLogc("[HTTPS Client] Using server URL: %s", t.serverURL)
 
-	// Test connection using original hostname
+	// Test connection
 	req, err := http.NewRequest("GET", t.serverURL+"/", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
 
-	// Set the Host header to the original hostname
-	req.Host = originalHost
+	// Always use the original hostname in the Host header
+	req.Host = t.originalHostname
+	addCommonHeaders(req)
+	debugLogc("[HTTPS Client] Set request Host header to: %s", t.originalHostname)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -196,7 +213,7 @@ func (t *HTTPSTransportClient) Connect(serverAddr string) error {
 	}
 	defer resp.Body.Close()
 
-	// Accept any status code as long as we can establish the connection
+	debugLogc("[HTTPS Client] Successfully connected to server")
 	return nil
 }
 
@@ -260,7 +277,7 @@ func addCommonHeaders(req *http.Request) {
 func (t *HTTPSTransportClient) SendAuth(token string) error {
 	// Generate and assign session ID
 	t.sessionID = fmt.Sprintf("%d-%s", time.Now().UnixNano(), generateRandomString(8))
-	fmt.Printf("[HTTPS Client] Generated and stored session ID: %s\n", t.sessionID)
+	debugLogc("[HTTPS Client] Generated and stored session ID: %s", t.sessionID)
 
 	url := fmt.Sprintf("%s%s", t.serverURL, generateEndpointPath("auth"))
 	req, err := http.NewRequest("POST", url, bytes.NewReader([]byte(token)))
@@ -269,6 +286,7 @@ func (t *HTTPSTransportClient) SendAuth(token string) error {
 	}
 
 	addCommonHeaders(req)
+	req.Host = t.originalHostname
 	req.Header.Set("X-For", t.sessionID)
 	req.Header.Set("Content-Type", "application/octet-stream")
 
@@ -280,11 +298,31 @@ func (t *HTTPSTransportClient) SendAuth(token string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("auth failed with status: %d, body: %s", resp.StatusCode, string(body))
+		// Extract title if HTML response
+		if title := extractTitle(string(body)); title != "" {
+			return fmt.Errorf("auth failed with status: %d, error: %s", resp.StatusCode, title)
+		}
+		// Fallback to short error if no title found
+		return fmt.Errorf("auth failed with status: %d", resp.StatusCode)
 	}
 
-	fmt.Printf("[HTTPS Client] Auth successful, session ID is: %s\n", t.sessionID)
+	debugLogc("[HTTPS Client] Auth successful, session ID is: %s", t.sessionID)
 	return nil
+}
+
+func extractTitle(html string) string {
+	titleStart := strings.Index(html, "<title>")
+	if titleStart == -1 {
+		return ""
+	}
+	titleStart += 7 // length of "<title>"
+
+	titleEnd := strings.Index(html[titleStart:], "</title>")
+	if titleEnd == -1 {
+		return ""
+	}
+
+	return strings.TrimSpace(html[titleStart : titleStart+titleEnd])
 }
 
 func (t *HTTPSTransportClient) ReadPacket() ([]byte, error) {
@@ -328,6 +366,7 @@ func (t *HTTPSTransportClient) ReadPacket() ([]byte, error) {
 	}
 
 	addCommonHeaders(req)
+	req.Host = t.originalHostname
 	req.Header.Set("X-For", t.sessionID)
 
 	resp, err := t.client.Do(req)
@@ -420,6 +459,7 @@ func (t *HTTPSTransportClient) sendImmediately(packet []byte) error {
 	}
 
 	addCommonHeaders(req)
+	req.Host = t.originalHostname
 	req.Header.Set("X-For", t.sessionID)
 	req.Header.Set("Content-Type", "application/octet-stream")
 
@@ -470,6 +510,7 @@ func (t *HTTPSTransportClient) flushWriteBuffer() error {
 	}
 
 	addCommonHeaders(req)
+	req.Host = t.originalHostname
 	req.Header.Set("X-For", t.sessionID)
 	req.Header.Set("Content-Type", "application/octet-stream")
 
@@ -537,7 +578,7 @@ func (t *HTTPSTransportClient) CheckAuthStatus() (*AuthResponse, error) {
 }
 
 func (t *HTTPSTransportClient) HandleAuth() (*AuthResponse, error) {
-	fmt.Printf("[HTTPS Client] Checking auth status for session: %s\n", t.sessionID)
+	debugLogc("[HTTPS Client] Checking auth status for session: %s", t.sessionID)
 
 	url := fmt.Sprintf("%s%s", t.serverURL, generateEndpointPath("auth_status"))
 	req, err := http.NewRequest("GET", url, nil)
@@ -546,8 +587,9 @@ func (t *HTTPSTransportClient) HandleAuth() (*AuthResponse, error) {
 	}
 
 	addCommonHeaders(req)
+	req.Host = t.originalHostname
 	req.Header.Set("X-For", t.sessionID)
-	fmt.Printf("[HTTPS Client] Setting X-For header to: %s\n", t.sessionID)
+	debugLogc("[HTTPS Client] Setting X-For header to: %s", t.sessionID)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -565,6 +607,11 @@ func (t *HTTPSTransportClient) HandleAuth() (*AuthResponse, error) {
 		return nil, fmt.Errorf("failed to parse auth status response: %v", err)
 	}
 
-	fmt.Printf("[HTTPS Client] Auth status response: %+v\n", authResp)
+	debugLogc("[HTTPS Client] Auth status response: %+v", authResp)
 	return &authResp, nil
+}
+
+func (t *HTTPSTransportClient) SetOriginalHostname(hostname string) {
+	t.originalHostname = hostname
+	debugLogc("[HTTPS Client] Set original hostname to: %s", hostname)
 }

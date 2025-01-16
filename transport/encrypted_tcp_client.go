@@ -43,14 +43,14 @@ import (
 	"net"
 	"os"
 	"strings"
-	"time"
 )
 
 // SingleTCPEncryptedClient implements the TransportType interface
 type SingleTCPEncryptedClient struct {
-	conn   *tls.Conn
-	cert   tls.Certificate
-	config *tls.Config
+	conn         *tls.Conn
+	cert         tls.Certificate
+	config       *tls.Config
+	originalHost string
 }
 
 // NewSingleTCPEncryptedClient creates a new encrypted TCP client
@@ -74,20 +74,25 @@ func NewSingleTCPEncryptedClient() (TransportType, error) {
 }
 
 func (t *SingleTCPEncryptedClient) Connect(addr string) error {
-	dialer := &net.Dialer{
-		KeepAlive: 30 * time.Second, // Send keepalive every 30 seconds
-		Timeout:   10 * time.Second, // Connection timeout
+	// Split IP and port from addr
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid address format: %v", err)
 	}
 
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, t.config)
+	// If we have an original hostname stored, use it for cert verification
+	verifyHost := host
+	if t.originalHost != "" {
+		verifyHost = t.originalHost
+	}
+
+	// Update TLS config with ServerName for proper certificate verification
+	t.config.ServerName = verifyHost
+
+	// Connect using the IP:port directly
+	conn, err := tls.Dial("tcp", addr, t.config)
 	if err != nil {
 		return err
-	}
-
-	// Enable TCP keepalive at the socket level
-	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
-		tcpConn.SetKeepAlive(true)
-		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
 
 	// Get server certificate fingerprint
@@ -98,7 +103,9 @@ func (t *SingleTCPEncryptedClient) Connect(addr string) error {
 
 	serverCert := conn.ConnectionState().PeerCertificates[0]
 	fingerprint := GetCertificateFingerprint(serverCert)
-	host := strings.Split(addr, ":")[0]
+
+	// Use original hostname for known_hosts checks
+	knownHostKey := verifyHost
 
 	// Load known hosts
 	knownHosts, err := loadKnownHosts()
@@ -108,15 +115,15 @@ func (t *SingleTCPEncryptedClient) Connect(addr string) error {
 	}
 
 	// Check if we know this host
-	if storedFingerprint, exists := knownHosts[host]; exists {
+	if storedFingerprint, exists := knownHosts[knownHostKey]; exists {
 		if fingerprint != storedFingerprint {
 			conn.Close()
 			return fmt.Errorf("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nThe fingerprint for host '%s' has changed from:\n%s\nto:\n%s\nIf you trust this change, please remove %s/.doxx.net/known_hosts",
-				host, storedFingerprint, fingerprint, os.Getenv("HOME"))
+				knownHostKey, storedFingerprint, fingerprint, os.Getenv("HOME"))
 		}
 	} else {
 		// New host, ask for confirmation
-		fmt.Printf("\nThe authenticity of host '%s' can't be established.\n", host)
+		fmt.Printf("\nThe authenticity of host '%s' can't be established.\n", knownHostKey)
 		fmt.Printf("Fingerprint: %s\n", fingerprint)
 		fmt.Print("Are you sure you want to continue connecting (yes/no)? ")
 
@@ -128,11 +135,11 @@ func (t *SingleTCPEncryptedClient) Connect(addr string) error {
 		}
 
 		// Save the new fingerprint
-		if err := saveKnownHost(host, fingerprint); err != nil {
+		if err := saveKnownHost(knownHostKey, fingerprint); err != nil {
 			conn.Close()
 			return fmt.Errorf("failed to save host fingerprint: %v", err)
 		}
-		fmt.Printf("Warning: Permanently added '%s' (%s) to the list of known hosts.\n", host, fingerprint)
+		fmt.Printf("Warning: Permanently added '%s' (%s) to the list of known hosts.\n", knownHostKey, fingerprint)
 	}
 
 	t.conn = conn
@@ -168,4 +175,8 @@ func (t *SingleTCPEncryptedClient) Close() error {
 		return t.conn.Close()
 	}
 	return nil
+}
+
+func (t *SingleTCPEncryptedClient) SetOriginalHost(host string) {
+	t.originalHost = host
 }

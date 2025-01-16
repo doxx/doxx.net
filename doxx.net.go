@@ -164,27 +164,6 @@ func NewRouteManager(tunIface string, killRoute bool, keepSSH bool) *RouteManage
 	}
 }
 
-// Add Cloudflare IP ranges
-var cloudflareRanges = []string{
-	"173.245.48.0/20",
-	"103.21.244.0/22",
-	"103.22.200.0/22",
-	"103.31.4.0/22",
-	"141.101.64.0/18",
-	"108.162.192.0/18",
-	"190.93.240.0/20",
-	"188.114.96.0/20",
-	"197.234.240.0/22",
-	"198.41.128.0/17",
-	"162.158.0.0/15",
-	"104.16.0.0/13",
-	"104.24.0.0/14",
-	"172.64.0.0/13",
-	"131.0.72.0/22",
-	"172.67.0.0/16",
-	"104.21.0.0/16",
-}
-
 func (rm *RouteManager) Setup(serverAddr string) error {
 	// Extract hostname/IP from server address by removing port
 	host, port, err := net.SplitHostPort(serverAddr)
@@ -201,71 +180,49 @@ func (rm *RouteManager) Setup(serverAddr string) error {
 		serverAddr = net.JoinHostPort(lastResolvedServerIP, port)
 	}
 
-	// Check if this is a Cloudflare-proxied domain
-	if strings.Contains(serverAddr, "cdn.") && strings.Contains(serverAddr, ".doxx.net") {
-		debugLog("Detected Cloudflare-proxied domain, setting up Cloudflare routes")
-
-		// Get current default route
-		gw, iface, err := rm.getCurrentDefaultRoute()
-		if err != nil {
-			return fmt.Errorf("failed to get current default route: %v", err)
-		}
-
-		rm.mu.Lock()
-		rm.defaultGW = gw
-		rm.defaultIface = iface
-		rm.mu.Unlock()
-
-		// Add static routes for all Cloudflare IP ranges
-		for _, cidr := range cloudflareRanges {
-			debugLog("Adding Cloudflare route for %s", cidr)
-			if err := rm.addStaticRoute(cidr, gw, iface); err != nil {
-				return fmt.Errorf("failed to add Cloudflare route for %s: %v", cidr, err)
-			}
-			rm.mu.Lock()
-			rm.staticRoutes = append(rm.staticRoutes, cidr)
-			rm.mu.Unlock()
-		}
-	} else {
-		// For direct connections, resolve the IP address first
-		ips, err := net.LookupIP(host)
-		if err != nil {
-			return fmt.Errorf("failed to resolve server address %s: %v", host, err)
-		}
-		if len(ips) == 0 {
-			return fmt.Errorf("no IP addresses found for %s", host)
-		}
-
-		// Store the first resolved IP for future reconnects
-		lastResolvedServerIP = ips[0].String()
-		debugLog("Resolved and cached server IP: %s for host: %s", lastResolvedServerIP, originalServerHost)
-
-		// Get current default route
-		gw, iface, err := rm.getCurrentDefaultRoute()
-		if err != nil {
-			return fmt.Errorf("failed to get current default route: %v", err)
-		}
-
-		rm.mu.Lock()
-		rm.defaultGW = gw
-		rm.defaultIface = iface
-		rm.mu.Unlock()
-
-		// Add static route for each resolved IP
-		for _, ip := range ips {
-			if ip.To4() != nil { // Only handle IPv4 addresses for now
-				ipStr := ip.String()
-				debugLog("Adding static route for VPN server %s (host: %s)", ipStr, originalServerHost)
-				if err := rm.addStaticRoute(ipStr+"/32", gw, iface); err != nil {
-					return fmt.Errorf("failed to add static route for VPN server IP %s: %v", ipStr, err)
-				}
-				rm.mu.Lock()
-				rm.staticRoutes = append(rm.staticRoutes, ipStr+"/32")
-				rm.serverIPs = append(rm.serverIPs, ip)
-				rm.mu.Unlock()
-			}
-		}
+	// For direct connections, resolve the IP address first
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("failed to resolve server address %s: %v", host, err)
 	}
+	if len(ips) == 0 {
+		return fmt.Errorf("no IP addresses found for %s", host)
+	}
+
+	// Store the first resolved IP for future reconnects
+	lastResolvedServerIP = ips[0].String()
+	debugLog("Resolved and cached server IP: %s for host: %s", lastResolvedServerIP, originalServerHost)
+
+	if serverInfo == nil {
+		info, err := resolveServerAddress(serverAddr)
+		if err != nil {
+			return fmt.Errorf("failed to resolve server address: %v", err)
+		}
+		serverInfo = info
+		debugLog("Initial DNS resolution: %s -> %s", serverInfo.Hostname, serverInfo.IP)
+	}
+
+	// Get current default route
+	gw, iface, err := rm.getCurrentDefaultRoute()
+	if err != nil {
+		return fmt.Errorf("failed to get current default route: %v", err)
+	}
+
+	rm.mu.Lock()
+	rm.defaultGW = gw
+	rm.defaultIface = iface
+	rm.mu.Unlock()
+
+	// Add static route for the resolved IP
+	debugLog("Adding static route for VPN server %s (host: %s)", serverInfo.IP, serverInfo.Hostname)
+	if err := rm.addStaticRoute(serverInfo.IP+"/32", gw, iface); err != nil {
+		return fmt.Errorf("failed to add static route for VPN server IP %s: %v", serverInfo.IP, err)
+	}
+
+	rm.mu.Lock()
+	rm.staticRoutes = append(rm.staticRoutes, serverInfo.IP+"/32")
+	rm.serverIPs = append(rm.serverIPs, net.ParseIP(serverInfo.IP))
+	rm.mu.Unlock()
 
 	debugLog("Using VPN server IP from auth response for default route")
 
@@ -386,164 +343,6 @@ type TransportType interface {
 	WritePacket([]byte) error
 	SendAuth(token string) error
 	HandleAuth() (*AuthResponse, error)
-}
-
-// SingleTCPTransport implements the basic TCP transport
-type SingleTCPTransport struct {
-	conn net.Conn
-}
-
-func NewSingleTCPTransport() *SingleTCPTransport {
-	return &SingleTCPTransport{}
-}
-
-func (t *SingleTCPTransport) Connect(serverAddr string) error {
-	// If we have a cached IP and this isn't our first connect, use it directly
-	connectAddr := serverAddr
-	if lastResolvedServerIP != "" && !firstConnect {
-		host, port, err := net.SplitHostPort(serverAddr)
-		if err != nil {
-			return fmt.Errorf("invalid server address format: %v", err)
-		}
-		connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
-		debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
-	} else {
-		// For initial connection, resolve and cache the IP
-		host, port, err := net.SplitHostPort(serverAddr)
-		if err != nil {
-			return fmt.Errorf("invalid server address format: %v", err)
-		}
-
-		// Only perform DNS resolution on first connect
-		if firstConnect && net.ParseIP(host) == nil {
-			ips, err := net.LookupIP(host)
-			if err != nil {
-				return fmt.Errorf("failed to resolve %s: %v", host, err)
-			}
-
-			// Find first IPv4 address
-			for _, ip := range ips {
-				if ip.To4() != nil {
-					lastResolvedServerIP = ip.String()
-					connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
-					debugLog("Resolved and cached server IP: %s for host: %s", lastResolvedServerIP, host)
-					break
-				}
-			}
-
-			if lastResolvedServerIP == "" {
-				return fmt.Errorf("no IPv4 addresses found for %s", host)
-			}
-		}
-	}
-
-	// Set a reasonable timeout for the initial connection
-	dialer := net.Dialer{
-		Timeout: 10 * time.Second,
-	}
-
-	conn, err := dialer.Dial("tcp", connectAddr)
-	if err != nil {
-		switch {
-		case strings.Contains(err.Error(), "connection refused"):
-			return fmt.Errorf("connection refused to %s - server may be down", connectAddr)
-		case strings.Contains(err.Error(), "i/o timeout"):
-			return fmt.Errorf("connection timed out to %s - check network connectivity", connectAddr)
-		case strings.Contains(err.Error(), "network is unreachable"):
-			return fmt.Errorf("network is unreachable - check network connection")
-		default:
-			return fmt.Errorf("connection failed: %v", err)
-		}
-	}
-
-	// Set read/write timeouts for the established connection
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetKeepAlive(true)
-		tcpConn.SetKeepAlivePeriod(30 * time.Second)
-	}
-
-	t.conn = conn
-	return nil
-}
-
-func (t *SingleTCPTransport) Close() error {
-	if t.conn != nil {
-		return t.conn.Close()
-	}
-	return nil
-}
-
-func (t *SingleTCPTransport) ReadPacket() ([]byte, error) {
-	if t.conn == nil {
-		return nil, fmt.Errorf("connection is closed")
-	}
-
-	// Set read deadline for each packet
-	if err := t.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return nil, fmt.Errorf("failed to set read deadline: %v", err)
-	}
-
-	packet, err := readPacket(t.conn)
-	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return nil, fmt.Errorf("connection timed out - network may be down")
-		}
-		return nil, err
-	}
-	return packet, nil
-}
-
-func (t *SingleTCPTransport) WritePacket(packet []byte) error {
-	if t.conn == nil {
-		return fmt.Errorf("connection is closed")
-	}
-
-	// Set write deadline for each packet
-	if err := t.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return fmt.Errorf("failed to set write deadline: %v", err)
-	}
-
-	if err := writePacket(t.conn, packet); err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return fmt.Errorf("write timed out - network may be down")
-		}
-		return err
-	}
-	return nil
-}
-
-func (t *SingleTCPTransport) SendAuth(token string) error {
-	return writePacket(t.conn, []byte(token))
-}
-
-func (t *SingleTCPTransport) HandleAuth() (*AuthResponse, error) {
-	packet, err := readPacket(t.conn)
-	if err != nil {
-		return nil, fmt.Errorf("connection error during authentication: %v", err)
-	}
-
-	debugLog("Auth server response: %s", string(packet))
-
-	var response AuthResponse
-	if err := json.Unmarshal(packet, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse server response: %v", err)
-	}
-
-	// Check for error response format
-	if response.Status == "error" {
-		return nil, fmt.Errorf("authentication rejected: %s", response.Message)
-	}
-
-	// Check for success response format
-	if !response.Success {
-		return nil, fmt.Errorf("authentication rejected by server")
-	}
-
-	if response.AssignedIP == "" {
-		return nil, fmt.Errorf("server did not assign an IP address")
-	}
-
-	return &response, nil
 }
 
 // Add these new types for bandwidth monitoring
@@ -868,6 +667,9 @@ func main() {
 	flag.BoolVar(&backbone, "backbone", false, "Enable backbone routing (10.0.0.0/8)") // Add this line
 	flag.Parse()
 
+	// Set debug mode in transport package
+	transport.SetDebug(debug)
+
 	if debug {
 		log.Printf("Debug logging enabled")
 	}
@@ -976,46 +778,21 @@ func main() {
 	// Connection loop
 	retryDelay := time.Second
 	for {
+		// Resolve server address once at startup
+		if serverInfo == nil {
+			info, err := resolveServerAddress(serverAddr)
+			if err != nil {
+				log.Printf("Failed to resolve server address: %v", err)
+				cleanup(routeManager, nil, ctx)
+				os.Exit(1)
+			}
+			serverInfo = info
+			debugLog("Initial DNS resolution: %s -> %s", serverInfo.Hostname, serverInfo.IP)
+		}
+
 		// Create transport
 		var client transport.TransportType
 		switch vpnType {
-		case "tcp":
-			client = transport.NewSingleTCPClient()
-			// Use cached IP if available, otherwise use original address
-			connectAddr := serverAddr
-			if lastResolvedServerIP != "" && !firstConnect {
-				host, port, _ := net.SplitHostPort(serverAddr)
-				connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
-				debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
-			} else {
-				debugLog("No cached IP available or first connect, using original address: %s", serverAddr)
-			}
-			if err := client.Connect(connectAddr); err != nil {
-				if noAutoReconnect {
-					log.Printf("Connection failed: %v", err)
-					cleanup(routeManager, nil, ctx)
-					os.Exit(1)
-				}
-				// Temporarily disable bandwidth display during reconnection
-				toggleBandwidthDisplay(false)
-				log.Printf("Connection failed: %v, retrying in %v...", err, retryDelay)
-
-				// Use timer for retry delay with interrupt handling
-				timer := time.NewTimer(retryDelay)
-				select {
-				case <-timer.C:
-					retryDelay *= 2
-					if retryDelay > time.Minute {
-						retryDelay = time.Minute
-					}
-					continue
-				case <-sigChan:
-					timer.Stop()
-					log.Println("Received interrupt signal")
-					cleanup(routeManager, client, ctx)
-					os.Exit(0)
-				}
-			}
 		case "tcp-encrypted":
 			var initErr error
 			client, initErr = transport.NewSingleTCPEncryptedClient()
@@ -1024,15 +801,15 @@ func main() {
 				cleanup(routeManager, nil, ctx)
 				os.Exit(1)
 			}
-			// Add the same IP caching logic for tcp-encrypted
-			connectAddr := serverAddr
-			if lastResolvedServerIP != "" && !firstConnect {
-				host, port, _ := net.SplitHostPort(serverAddr)
-				connectAddr = net.JoinHostPort(lastResolvedServerIP, port)
-				debugLog("Reconnecting using cached IP %s (original host: %s)", lastResolvedServerIP, host)
-			} else {
-				debugLog("No cached IP available or first connect, using original address: %s", serverAddr)
+			// Set original hostname for TLS verification
+			if encryptedClient, ok := client.(*transport.SingleTCPEncryptedClient); ok {
+				encryptedClient.SetOriginalHost(serverInfo.Hostname)
+				debugLog("Set original hostname for TLS verification: %s", serverInfo.Hostname)
 			}
+
+			// Connect using resolved IP
+			connectAddr := net.JoinHostPort(serverInfo.IP, serverInfo.Port)
+
 			if err := client.Connect(connectAddr); err != nil {
 				if noAutoReconnect {
 					log.Printf("Connection failed: %v", err)
@@ -1070,6 +847,10 @@ func main() {
 				}
 			}
 			client = transport.NewHTTPSTransportClient(proxyConfig)
+			if httpsClient, ok := client.(*transport.HTTPSTransportClient); ok {
+				httpsClient.SetOriginalHostname(serverInfo.Hostname)
+				debugLog("Set original hostname for HTTPS client: %s", serverInfo.Hostname)
+			}
 			// Add IP caching logic for HTTPS
 			connectAddr := serverAddr
 			if lastResolvedServerIP != "" && !firstConnect {
@@ -1112,12 +893,35 @@ func main() {
 		}
 
 		// Connect and handle session
-		log.Printf("Connecting to %s...", serverAddr)
+		if serverInfo == nil {
+			info, err := resolveServerAddress(serverAddr)
+			if err != nil {
+				log.Printf("Failed to resolve server address: %v", err)
+				cleanup(routeManager, client, ctx)
+				os.Exit(1)
+			}
+			serverInfo = info
+			debugLog("Initial DNS resolution: %s -> %s", serverInfo.Hostname, serverInfo.IP)
+		}
+
+		// Set original hostname for encrypted transport
+		if encryptedClient, ok := client.(*transport.SingleTCPEncryptedClient); ok {
+			encryptedClient.SetOriginalHost(serverInfo.Hostname)
+			debugLog("Set original hostname for TLS: %s", serverInfo.Hostname)
+		}
+
+		// Use resolved IP for connection
+		connectAddr := net.JoinHostPort(serverInfo.IP, serverInfo.Port)
+		//if serverInfo.Hostname != serverInfo.IP {
+		//	log.Printf("Connecting to %s (%s)", serverInfo.Hostname, serverInfo.IP)
+		//} else {
+		//	log.Printf("Connecting to %s", serverInfo.IP)
+		//}
 
 		// Add signal handling for connection attempt
 		connErrChan := make(chan error, 1)
 		go func() {
-			connErrChan <- client.Connect(serverAddr)
+			connErrChan <- client.Connect(connectAddr)
 		}()
 
 		select {
@@ -1156,6 +960,11 @@ func main() {
 
 		// Reset delay on successful connection
 		retryDelay = time.Second
+
+		// Add reconnection message (except for first connection)
+		if !firstConnect {
+			log.Printf("Niceee.... we're re-connected back on the doxx.net")
+		}
 
 		// Send authentication token
 		if err := client.SendAuth(token); err != nil {
@@ -1423,7 +1232,7 @@ func main() {
 						packetToWrite = packet
 					}
 
-					// Write ONLY ONCE, using either the modified copy or original
+					// Write ONCE, using either the modified copy or original
 					if _, err := tunDevice.Write(packetToWrite); err != nil {
 						errChan <- fmt.Errorf("error writing to TUN: %v", err)
 						return
@@ -1475,9 +1284,8 @@ func main() {
 					select {
 					case <-timer.C:
 						// Timer completed, continue with reconnect
-						if !connectionInfoDisplayed {
-							log.Printf("Connecting to %s...", originalServerHost)
-						}
+						log.Printf("Connecting to %s:%s (%s)...",
+							serverInfo.IP, serverInfo.Port, serverInfo.Hostname)
 					case <-sigChan:
 						timer.Stop()
 						log.Println("Received interrupt signal")
@@ -2219,15 +2027,6 @@ func getInterfaceStats(ifName string) (*interfaceStats, error) {
 
 	for _, counter := range counters {
 		if counter.Name == ifName {
-			// Windows (wintun) reports correct stats, other platforms need adjustment
-			if runtime.GOOS == "windows" {
-				return &interfaceStats{
-					rx: counter.BytesRecv, // Don't divide by 2 on Windows
-					tx: counter.BytesSent,
-				}, nil
-			}
-
-			// For other platforms using water/tun:
 			// For download (rx), only count packets coming from the transport
 			// For upload (tx), only count packets going to the transport
 			return &interfaceStats{
@@ -3146,11 +2945,6 @@ func (rm *RouteManager) updateServerRoutes(serverAddr string) error {
 	// Extract hostname/IP from server address
 	host := strings.Split(serverAddr, ":")[0]
 
-	// For Cloudflare-proxied domains, routes are already set up
-	if strings.Contains(serverAddr, "cdn.") && strings.Contains(serverAddr, ".doxx.net") {
-		return nil
-	}
-
 	// Resolve the IP address
 	ips, err := net.LookupIP(host)
 	if err != nil {
@@ -3211,3 +3005,48 @@ IYJwiIr/PAbTc/Jp991L7i2b+AJ+3p8tsZmOllX65NDDIdEPG8HzgXIvXtRvg+Yz
 EsXe6db9nRe0+VqmiJ5RDMwv07xFcRdEMcoKmSg4ZlwpJIeNASn/JyiusssiGJ4k
 I1XgeBmJwVJi
 -----END CERTIFICATE-----`
+
+// Add at package level
+type ServerInfo struct {
+	IP       string
+	Port     string
+	Hostname string
+}
+
+var serverInfo *ServerInfo
+
+func resolveServerAddress(serverAddr string) (*ServerInfo, error) {
+	host, port, err := net.SplitHostPort(serverAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server address format: %v", err)
+	}
+
+	// If host is already an IP, store it directly
+	if ip := net.ParseIP(host); ip != nil {
+		return &ServerInfo{
+			IP:       ip.String(),
+			Hostname: host,
+			Port:     port,
+		}, nil
+	}
+
+	// Resolve hostname to IP
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve %s: %v", host, err)
+	}
+
+	// Find first IPv4 address
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			debugLog("Initial DNS resolution: %s -> %s", host, ip.String())
+			return &ServerInfo{
+				IP:       ip.String(),
+				Hostname: host,
+				Port:     port,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no IPv4 addresses found for %s", host)
+}
