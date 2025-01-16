@@ -47,6 +47,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -961,10 +962,28 @@ func main() {
 		// Reset delay on successful connection
 		retryDelay = time.Second
 
-		// Add reconnection message (except for first connection)
-		if !firstConnect {
-			log.Printf("Niceee.... we're re-connected back on the doxx.net")
+		var reconnectMessages = []string{
+			"Awoooga! We're back on doxx.net! 🚀",
+			"Hot dog! doxx.net is alive again! 🌭",
+			"Bazinga! Back in action on doxx.net! ⚡",
+			"Yeehaw! Riding the doxx.net waves again! 🌊",
+			"Shazam! doxx.net connection restored! ✨",
+			"Booyah! Back on doxx.net and ready to roll! 🎲",
+			"Kapow! doxx.net connection is back in business! 💥",
+			"Zing! We've got doxx.net mojo working again! 🎯",
+			"Wahoo! doxx.net is back in the groove! 🎵",
+			"Cowabunga! doxx.net connection is surfing again! 🏄",
+			"Zowie! Back on the doxx.net express! 🚂",
+			"Holy smokes! doxx.net is back online! 💨",
+			"Yippee! doxx.net connection restored! 🎉",
+			"Bam! We're locked into doxx.net again! 🔒",
+			"Sweet! doxx.net connection is flowing again! 🌊",
 		}
+
+		// Add connection message
+		rand.Seed(time.Now().UnixNano())
+		randomIndex := rand.Intn(len(reconnectMessages))
+		log.Printf(reconnectMessages[randomIndex])
 
 		// Send authentication token
 		if err := client.SendAuth(token); err != nil {
@@ -1040,7 +1059,7 @@ func main() {
 			routeManager.SetServerIP(response.ServerIP)
 		}
 
-		// IMPORTANT: Only store the default gateway on first connection
+		// IMPORTANT: Only store the default gateway and setup routes on first connection
 		if routeManager != nil && firstConnect {
 			if err := routeManager.Setup(serverAddr); err != nil {
 				log.Printf("Failed to setup routing: %v", err)
@@ -1049,27 +1068,19 @@ func main() {
 			}
 			firstConnect = false
 		} else if routeManager != nil {
-			// On reconnect, only update the server routes
-			if err := routeManager.updateServerRoutes(serverAddr); err != nil {
-				log.Printf("Failed to update server routes: %v", err)
-				cleanup(routeManager, client, ctx)
-				os.Exit(1)
-			}
+			// On reconnect, we don't need to do anything with routes
+			// They should still be intact since the TUN interface is still up
+			debugLog("Skipping route setup on reconnect - using existing routes")
 		}
-		// Add the backbone route here
-		if backbone {
-			// Initialize RouteManager just for backbone if it doesn't exist
-			if routeManager == nil {
-				debugLog("Initializing route manager for backbone routing")
-				routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
-			}
 
-			debugLog("Setting up backbone route 10.0.0.0/8 via %s", response.ServerIP)
+		// Add the backbone route here (only if needed and not already present)
+		if backbone && routeManager != nil {
+			debugLog("Checking backbone route 10.0.0.0/8 via %s", response.ServerIP)
 			if err := routeManager.addStaticRoute("10.0.0.0/8", response.ServerIP, tunDevice.Name()); err != nil {
-				log.Printf("Warning: Failed to add backbone route: %v", err)
+				if !strings.Contains(err.Error(), "already exists") {
+					log.Printf("Warning: Failed to add backbone route: %v", err)
+				}
 				// Continue execution as this is not critical
-			} else {
-				log.Printf("Successfully added backbone route 10.0.0.0/8 via %s", response.ServerIP)
 			}
 		}
 
@@ -2942,31 +2953,30 @@ func createBlockedDNSResponse(originalPacket []byte, dnsServerIP net.IP) []byte 
 
 // Add this new method to RouteManager
 func (rm *RouteManager) updateServerRoutes(serverAddr string) error {
-	// Extract hostname/IP from server address
-	host := strings.Split(serverAddr, ":")[0]
+	if serverInfo == nil {
+		return fmt.Errorf("no server info available")
+	}
 
-	// Resolve the IP address
-	ips, err := net.LookupIP(host)
+	debugLog("Updating server routes using existing server IP: %s", serverInfo.IP)
+
+	// Get current default gateway
+	gw, iface, err := rm.getCurrentDefaultRoute()
 	if err != nil {
-		return fmt.Errorf("failed to resolve server address %s: %v", host, err)
-	}
-	if len(ips) == 0 {
-		return fmt.Errorf("no IP addresses found for %s", host)
+		return fmt.Errorf("failed to get current default route: %v", err)
 	}
 
-	// Add static route for each resolved IP
-	for _, ip := range ips {
-		if ip.To4() != nil { // Only handle IPv4 addresses
-			ipStr := ip.String()
-			debugLog("Adding static route for VPN server %s", ipStr)
-			if err := rm.addStaticRoute(ipStr+"/32", rm.defaultGW, rm.defaultIface); err != nil {
-				return fmt.Errorf("failed to add static route for VPN server IP %s: %v", ipStr, err)
+	// Add static route for the server IP - don't fail if route already exists
+	err = rm.addStaticRoute(serverInfo.IP+"/32", gw, iface)
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			// On Windows, if the route already exists, that's fine
+			if strings.Contains(err.Error(), "The object already exists") {
+				debugLog("Route to %s already exists, continuing", serverInfo.IP)
+				return nil
 			}
-			rm.mu.Lock()
-			rm.staticRoutes = append(rm.staticRoutes, ipStr+"/32")
-			rm.serverIPs = append(rm.serverIPs, ip)
-			rm.mu.Unlock()
 		}
+		// Log the error but don't exit
+		debugLog("Warning: Failed to add server route: %v", err)
 	}
 
 	return nil
