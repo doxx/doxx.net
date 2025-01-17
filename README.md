@@ -338,7 +338,7 @@ Submit your CSR to the doxx.net API:
 curl -X POST https://setup.doxx.net/ \
     -d "token=YOUR_TOKEN" \
     -d "domain=example.doxx" \
-    -d "csr=$(cat domain.csr | tr -d '\n')" \
+    -d "csr=$(cat domain.csr)" \
     -d "sign_certificate=1" \
     > domain.crt
 
