@@ -626,6 +626,72 @@ func ensureHomeEnv() {
 	}
 }
 
+// Add this function before main()
+func startTunKeepalive(ctx context.Context, tunDevice *TunDevice, serverIP string) {
+	debugLog("TUN keepalive routine started")
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		// Create a raw socket for ICMP
+		conn, err := net.DialIP("ip4:icmp", nil, &net.IPAddr{IP: net.ParseIP("10.0.2.1")})
+		if err != nil {
+			debugLog("Failed to create keepalive socket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		// ICMP packet sequence number
+		var seq uint16 = 0
+
+		for {
+			select {
+			case <-ctx.Done():
+				debugLog("TUN keepalive routine stopping")
+				return
+			case <-ticker.C:
+				debugLog("Sending TUN keepalive ping")
+
+				// Create ICMP echo request
+				icmp := []byte{
+					8, 0, 0, 0, // Type, Code, Checksum
+					0, 0, 0, 0, // ID, Sequence
+				}
+
+				// Set ID and sequence
+				binary.BigEndian.PutUint16(icmp[4:], uint16(os.Getpid()&0xffff))
+				binary.BigEndian.PutUint16(icmp[6:], seq)
+				seq++
+
+				// Calculate checksum
+				cs := checksum(icmp)
+				binary.BigEndian.PutUint16(icmp[2:], cs)
+
+				// Send through the network stack
+				if _, err := conn.Write(icmp); err != nil {
+					debugLog("Keepalive ping failed: %v", err)
+				} else {
+					debugLog("Keepalive ping sent successfully")
+				}
+			}
+		}
+	}()
+}
+
+// Add this helper function for ICMP checksum calculation
+func checksum(data []byte) uint16 {
+	var sum uint32
+	for i := 0; i < len(data)-1; i += 2 {
+		sum += uint32(data[i])<<8 | uint32(data[i+1])
+	}
+	if len(data)%2 == 1 {
+		sum += uint32(data[len(data)-1]) << 8
+	}
+	sum = (sum >> 16) + (sum & 0xffff)
+	sum = sum + (sum >> 16)
+	return uint16(^sum)
+}
+
 func main() {
 	// Ensure HOME env is set before any operations
 	ensureHomeEnv()
@@ -768,7 +834,7 @@ func main() {
 
 	// First, ensure routeManager is properly initialized before use
 	var routeManager *RouteManager
-	if !noRouting {
+	if !noRouting || backbone { // Initialize if either routing is enabled OR backbone is enabled
 		debugLog("Initializing route manager...")
 		routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
 		if routeManager == nil {
@@ -1053,6 +1119,34 @@ func main() {
 			os.Exit(1)
 		}
 
+		// Start TUN keepalive for Linux BEFORE starting packet handlers
+		if runtime.GOOS == "linux" {
+			debugLog("Starting TUN keepalive for Linux")
+			startTunKeepalive(ctx, tunDevice, response.ServerIP)
+		}
+
+		// Re-add backbone route after reconnection if enabled
+		debugLog("Checking if backbone flag is set")
+		if flag.Lookup("backbone").Value.String() == "true" {
+			debugLog("Attempting to add backbone route 10.0.0.0/8 via %s on %s", response.ServerIP, tunDevice.Name())
+			// Initialize minimal route manager just for backbone if needed
+			if routeManager == nil {
+				debugLog("Initializing minimal route manager for backbone routing...")
+				routeManager = NewRouteManager(tunDevice.Name(), false, false)
+			}
+			if routeManager != nil {
+				if err := routeManager.addStaticRoute("10.0.0.0/8", response.ServerIP, tunDevice.Name()); err != nil {
+					log.Printf("Failed to add backbone route: %v", err)
+				} else {
+					log.Printf("Successfully added backbone route 10.0.0.0/8")
+				}
+			} else {
+				debugLog("Failed to initialize RouteManager for backbone route")
+			}
+		} else {
+			debugLog("Backbone routing not enabled, skipping 10.0.0.0/8 route")
+		}
+
 		// Set client and server IPs in route manager
 		if routeManager != nil {
 			routeManager.SetClientIP(response.AssignedIP)
@@ -1061,10 +1155,12 @@ func main() {
 
 		// IMPORTANT: Only store the default gateway and setup routes on first connection
 		if routeManager != nil && firstConnect {
-			if err := routeManager.Setup(serverAddr); err != nil {
-				log.Printf("Failed to setup routing: %v", err)
-				cleanup(routeManager, client, ctx)
-				os.Exit(1)
+			if !noRouting { // Only do full routing setup if -no-routing is not set
+				if err := routeManager.Setup(serverAddr); err != nil {
+					log.Printf("Failed to setup routing: %v", err)
+					cleanup(routeManager, client, ctx)
+					os.Exit(1)
+				}
 			}
 			firstConnect = false
 		} else if routeManager != nil {
@@ -1073,15 +1169,26 @@ func main() {
 			debugLog("Skipping route setup on reconnect - using existing routes")
 		}
 
-		// Add the backbone route here (only if needed and not already present)
-		if backbone && routeManager != nil {
-			debugLog("Checking backbone route 10.0.0.0/8 via %s", response.ServerIP)
-			if err := routeManager.addStaticRoute("10.0.0.0/8", response.ServerIP, tunDevice.Name()); err != nil {
-				if !strings.Contains(err.Error(), "already exists") {
-					log.Printf("Warning: Failed to add backbone route: %v", err)
-				}
-				// Continue execution as this is not critical
+		// After TUN setup and before starting packet handlers
+		debugLog("Checking if backbone flag is set")
+		if flag.Lookup("backbone").Value.String() == "true" {
+			debugLog("Attempting to add backbone route 10.0.0.0/8 via %s on %s", response.ServerIP, tunDevice.Name())
+			// Initialize minimal route manager just for backbone if needed
+			if routeManager == nil {
+				debugLog("Initializing minimal route manager for backbone routing...")
+				routeManager = NewRouteManager(tunDevice.Name(), false, false)
 			}
+			if routeManager != nil {
+				if err := routeManager.addStaticRoute("10.0.0.0/8", response.ServerIP, tunDevice.Name()); err != nil {
+					log.Printf("Failed to add backbone route: %v", err)
+				} else {
+					log.Printf("Successfully added backbone route 10.0.0.0/8")
+				}
+			} else {
+				debugLog("Failed to initialize RouteManager for backbone route")
+			}
+		} else {
+			debugLog("Backbone routing not enabled, skipping 10.0.0.0/8 route")
 		}
 
 		// Add the helpful information with actual gateway - OS specific only
@@ -1118,7 +1225,7 @@ func main() {
 		})
 
 		// Add default route after initial connectivity is confirmed
-		if routeManager != nil && !noRouting {
+		if routeManager != nil && !noRouting { // Only set default route if -no-routing is not set
 			debugLog("Setting default route through VPN tunnel")
 			if err := routeManager.setDefaultRoute(tunDevice.Name(), response.ServerIP); err != nil {
 				log.Printf("Warning: Failed to set default route: %v", err)
