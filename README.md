@@ -155,19 +155,22 @@ doxx.net-arm64.exe -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type htt
 ## Available Servers
 
 ### TCP Encrypted Servers
-- tcp-encrypted.mia.us.doxx.net:443 (Miami)
-- tcp-encrypted.lax.us.doxx.net:443 (Los Angeles)
-- tcp-encrypted.ams.eu.doxx.net:443 (Amsterdam)
+- tcp-encrypted.mia.us.doxx.net:443 (Miami, US)
+- tcp-encrypted.lax.us.doxx.net:443 (Los Angeles, US)
+- tcp-encrypted.ams.eu.doxx.net:443 (Amsterdam, NL)
+- tcp-encrypted.tor.ca.doxx.net:443 (Toronto, CA)
 
 ### HTTPS Servers
-- https.mia.us.doxx.net:443 (Miami)
-- https.lax.us.doxx.net:443 (Los Angeles)
-- https.ams.eu.doxx.net:443 (Amsterdam)
+- https.mia.us.doxx.net:443 (Miami, US)
+- https.lax.us.doxx.net:443 (Los Angeles, US)
+- https.ams.eu.doxx.net:443 (Amsterdam, NL)
+- https.tor.ca.doxx.net:443 (Toronto, CA)
 
 ### CDN-Protected Servers
-- cdn.mia.us.doxx.net:443 (Miami)
-- cdn.lax.us.doxx.net:443 (Los Angeles)
-- cdn.ams.eu.doxx.net:443 (Amsterdam)
+- cdn.mia.us.doxx.net:443 (Miami, US)
+- cdn.lax.us.doxx.net:443 (Los Angeles, US)
+- cdn.ams.eu.doxx.net:443 (Amsterdam, NL)
+- cdn.tor.ca.doxx.net:443 (Toronto, CA)
 ---
 
 ## Location Spoofing using Doxxulator
