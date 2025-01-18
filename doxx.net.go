@@ -2603,8 +2603,8 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 		cmd := exec.Command("security", "find-certificate", "-c", "doxx.net Root CA", "/Library/Keychains/System.keychain")
 		status["ca_system"] = cmd.Run() == nil
 
-		// Check curl certificates
-		_, err := os.Stat("/etc/ssl/certs/doxx-root-ca.crt")
+		// Check curl certificates - Updated to check MacPorts location
+		_, err := os.Stat("/opt/local/share/curl/curl-ca-bundle.crt")
 		status["ca_curl"] = err == nil
 
 		// Always write the resolver configuration
@@ -2759,11 +2759,12 @@ func setupCAandDNS() error {
 			// Install CA certificate for curl if needed
 			if !status["ca_curl"] {
 				fmt.Println("Installing Root CA for curl...")
-				if err := exec.Command("sudo", "mkdir", "-p", "/etc/ssl/certs").Run(); err != nil {
+				if err := exec.Command("sudo", "mkdir", "-p", "/opt/local/share/curl").Run(); err != nil {
 					return fmt.Errorf("failed to create cert directory: %v", err)
 				}
-				if err := exec.Command("sudo", "cp", "assets/doxx-root-ca.crt", "/etc/ssl/certs/").Run(); err != nil {
-					return fmt.Errorf("failed to copy CA cert: %v", err)
+				// Append to existing bundle instead of replacing
+				if err := exec.Command("sudo", "bash", "-c", "cat assets/doxx-root-ca.crt >> /opt/local/share/curl/curl-ca-bundle.crt").Run(); err != nil {
+					return fmt.Errorf("failed to append CA cert: %v", err)
 				}
 			}
 
