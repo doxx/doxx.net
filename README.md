@@ -57,7 +57,7 @@ Join us on Discord: https://discord.gg/Gr9rByrEzZ
 
 ### 1. Create an Account
 
-doxx.net doesn't use usernames or passwords. Instead, you'll receive an authentication token via email. This token is your key to the doxx.net network and is tied to your own IP address in the doxx.net network.
+doxx.net doesn't use usernames or passwords. Instead, you'll receive an authentication token via email. This token is your key to the doxx.net API and you can create new tunnels which have their own tokens attached. 
 
 #### Standard Account Creation
 ```bash
@@ -96,7 +96,66 @@ curl -X POST --connect-to setup.doxx.net:443:198.41.216.162 https://setup.doxx.n
 ```
 **Note**: These edge IPs are stable and globally accessible. No DNS lookup required.
 
-### 2. Install the Client
+
+### 2. Create a Tunnel
+
+Before connecting to doxx.net, you'll need to create a tunnel. Choose between doxx.net's native protocol or WireGuard:
+
+#### Create a doxx.net Tunnel
+```bash
+# Using curl
+curl -X POST https://setup.doxx.net/ \
+    -d "token=YOUR_TOKEN" \
+    -d "type=doxx.net" \
+    -d "create_tunnel=1"
+
+# Using wget
+wget --post-data "token=YOUR_TOKEN&type=doxx.net&create_tunnel=1" https://setup.doxx.net/
+```
+
+#### Optional: Name Your Tunnel
+You can add a custom name to your tunnel for easier identification:
+
+```bash
+curl -X POST https://setup.doxx.net/ \
+    -d "token=YOUR_TOKEN" \
+    -d "type=doxx.net" \
+    -d "name=my-home-tunnel" \
+    -d "create_tunnel=1"
+```
+
+The API will return your tunnel configuration details, including the tunnel token needed for connection.
+
+#### List Your Tunnels
+To view all your tunnels and their details:
+
+```bash
+# Using curl
+curl -X POST https://setup.doxx.net/ \
+    -d "token=YOUR_TOKEN" \
+    -d "list_tunnels=1"
+
+# Using wget
+wget --post-data "token=YOUR_TOKEN&list_tunnels=1" https://setup.doxx.net/
+```
+
+Example response:
+```json
+{
+    "status": "success",
+    "tunnels": [
+        {
+            "tunnel_token": "YOUR_TUNNEL_TOKEN",
+            "assigned_ip": "10.1.2.3/24",
+            "type": "doxx.net",
+            "name": "my-home-tunnel",
+            "created_at": "2024-01-01 12:00:00"
+        }
+    ]
+}
+```
+
+### 4. Install the Client
 
 1. Download the appropriate binary for your system from the [releases page](https://github.com/doxx/doxx.net/releases).
 
@@ -122,7 +181,7 @@ chmod +x ./doxx.net
 
 Note: For Windows users, the executable can be run directly without additional setup.
 
-### 3. Connect to VPN
+### 5. Connect to VPN
 
 Choose one of the following connection methods:
 
@@ -130,25 +189,25 @@ Choose one of the following connection methods:
 
 ```bash
 # Unix-based systems (Linux/macOS)
-sudo ./doxx.net -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+sudo ./doxx.net -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TUNNEL_TOKEN -type tcp-encrypted
 
 # Windows (Run Command Prompt as Administrator)
 # For AMD64/x64 systems
-doxx.net-amd64.exe -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+doxx.net-amd64.exe -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TUNNEL_TOKEN -type tcp-encrypted
 # For ARM64 systems
-doxx.net-arm64.exe -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TOKEN -type tcp-encrypted
+doxx.net-arm64.exe -server tcp-encrypted.mia.us.doxx.net:443 -token YOUR_TUNNEL_TOKEN -type tcp-encrypted
 ```
 
 #### HTTPS Mode
 ```bash
 # Unix-based systems (Linux/macOS)
-sudo ./doxx.net -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type https
+sudo ./doxx.net -server https.mia.us.doxx.net:443 -token YOUR_TUNNEL_TOKEN -type https
 
 # Windows (Run Command Prompt as Administrator)
 # For AMD64/x64 systems
-doxx.net-amd64.exe -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type https
+doxx.net-amd64.exe -server https.mia.us.doxx.net:443 -token YOUR_TUNNEL_TOKEN -type https
 # For ARM64 systems
-doxx.net-arm64.exe -server https.mia.us.doxx.net:443 -token YOUR_TOKEN -type https
+doxx.net-arm64.exe -server https.mia.us.doxx.net:443 -token YOUR_TUNNEL_TOKEN -type https
 ```
 
 
