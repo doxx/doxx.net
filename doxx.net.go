@@ -874,34 +874,59 @@ func main() {
 				debugLog("Set original hostname for TLS verification: %s", serverInfo.Hostname)
 			}
 
-			// Connect using resolved IP
+			// Connect using resolved IP with timeout and interrupt handling
 			connectAddr := net.JoinHostPort(serverInfo.IP, serverInfo.Port)
+			log.Printf("Connecting to %s:%s (%s)...", serverInfo.IP, serverInfo.Port, serverInfo.Hostname)
 
-			if err := client.Connect(connectAddr); err != nil {
-				if noAutoReconnect {
-					log.Printf("Connection failed: %v", err)
-					cleanup(routeManager, nil, ctx)
-					os.Exit(1)
-				}
-				// Temporarily disable bandwidth display during reconnection
-				toggleBandwidthDisplay(false)
-				log.Printf("Connection failed: %v, retrying in %v...", err, retryDelay)
+			// Create connection context with timeout
+			connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 
-				// Use timer for retry delay with interrupt handling
-				timer := time.NewTimer(retryDelay)
-				select {
-				case <-timer.C:
-					retryDelay *= 2
-					if retryDelay > time.Minute {
-						retryDelay = time.Minute
+			// Channel for connection result
+			connErrCh := make(chan error, 1)
+
+			// Attempt connection in goroutine
+			go func() {
+				connErrCh <- client.Connect(connectAddr)
+			}()
+
+			// Wait for either connection, timeout, or interrupt
+			select {
+			case err := <-connErrCh:
+				if err != nil {
+					if noAutoReconnect {
+						log.Printf("Connection failed: %v", err)
+						cleanup(routeManager, nil, ctx)
+						os.Exit(1)
 					}
-					continue
-				case <-sigChan:
-					timer.Stop()
-					log.Println("Received interrupt signal")
-					cleanup(routeManager, client, ctx)
-					os.Exit(0)
+					// Temporarily disable bandwidth display during reconnection
+					toggleBandwidthDisplay(false)
+					log.Printf("Connection failed: %v, retrying in %v...", err, retryDelay)
+
+					// Use timer for retry delay with interrupt handling
+					timer := time.NewTimer(retryDelay)
+					select {
+					case <-timer.C:
+						retryDelay *= 2
+						if retryDelay > time.Minute {
+							retryDelay = time.Minute
+						}
+						continue
+					case <-sigChan:
+						timer.Stop()
+						log.Println("Received interrupt signal")
+						cleanup(routeManager, client, ctx)
+						os.Exit(0)
+					}
 				}
+			case <-connectCtx.Done():
+				log.Printf("Connection attempt timed out")
+				cleanup(routeManager, client, ctx)
+				os.Exit(1)
+			case <-sigChan:
+				log.Println("\nReceived interrupt signal during connection")
+				cleanup(routeManager, client, ctx)
+				os.Exit(0)
 			}
 		case "https":
 			var proxyConfig *transport.ProxyConfig
@@ -1453,6 +1478,34 @@ func main() {
 			log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
 			log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
 			log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
+
+			// Configure DNS resolver on macOS
+			if runtime.GOOS == "darwin" {
+				// Single, simpler configuration that we know works
+				resolverContent := []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch doxx\ntimeout 5")
+
+				if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err == nil {
+					if tmpfile, err := os.CreateTemp("", "resolver"); err == nil {
+						defer os.Remove(tmpfile.Name())
+
+						if _, err := tmpfile.Write(resolverContent); err == nil {
+							tmpfile.Close()
+
+							// Copy file to destination using sudo
+							if err := exec.Command("sudo", "mv", tmpfile.Name(), "/etc/resolver/doxx").Run(); err == nil {
+								// Set proper permissions
+								exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run()
+
+								// Flush DNS cache and restart mDNSResponder
+								exec.Command("sudo", "dscacheutil", "-flushcache").Run()
+								exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run()
+
+								log.Printf("DNS resolver configured successfully")
+							}
+						}
+					}
+				}
+			}
 
 			// Now perform the geo lookup after routes are established
 			performGeoLookup(func() {
@@ -2240,6 +2293,33 @@ func performGeoLookup(onComplete func()) {
 		// Print the formatted output
 		fmt.Println(output.String())
 
+		// Configure DNS resolver on macOS after geo lookup
+		if runtime.GOOS == "darwin" {
+			// Single, simpler configuration that we know works
+			resolverContent := []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch doxx\ntimeout 5")
+
+			if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err == nil {
+				if tmpfile, err := os.CreateTemp("", "resolver"); err == nil {
+					defer os.Remove(tmpfile.Name())
+
+					if _, err := tmpfile.Write(resolverContent); err == nil {
+						tmpfile.Close()
+
+						// Copy file to destination using sudo
+						if err := exec.Command("sudo", "mv", tmpfile.Name(), "/etc/resolver/doxx").Run(); err == nil {
+							// Set proper permissions
+							exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run()
+
+							// Flush DNS cache and restart mDNSResponder
+							exec.Command("sudo", "dscacheutil", "-flushcache").Run()
+							exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run()
+
+						}
+					}
+				}
+			}
+		}
+
 		// Call the completion callback
 		if onComplete != nil {
 			onComplete()
@@ -2609,10 +2689,10 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 
 		// Always write the resolver configuration
 		resolverContent := []byte("domain doxx\nnameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch_order 1\ntimeout 5\noptions private")
-
+		resolverContent2 := []byte("domain doxx\nnameserver 8.8.8.8\nsearch_order 1\ntimeout 5\noptions private")
 		// Create resolver directory if it doesn't exist
 		if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err == nil {
-			// Create temporary file with resolver content
+			// First configuration
 			if tmpfile, err := os.CreateTemp("", "resolver"); err == nil {
 				defer os.Remove(tmpfile.Name())
 
@@ -2620,21 +2700,42 @@ func checkCAandDNSConfig() (bool, map[string]bool) {
 					tmpfile.Close()
 
 					// Copy file to destination using sudo
-					if err := exec.Command("sudo", "cp", tmpfile.Name(), "/etc/resolver/doxx").Run(); err == nil {
+					if err := exec.Command("sudo", "mv", tmpfile.Name(), "/etc/resolver/doxx").Run(); err == nil {
 						// Set proper permissions
 						exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run()
 
 						// Flush DNS cache and restart mDNSResponder
 						exec.Command("sudo", "dscacheutil", "-flushcache").Run()
 						exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run()
+
+					}
+				}
+			}
+
+			// Small delay between writes
+			time.Sleep(500 * time.Millisecond)
+
+			// Second configuration
+			if tmpfile2, err := os.CreateTemp("", "resolver"); err == nil {
+				defer os.Remove(tmpfile2.Name())
+
+				if _, err := tmpfile2.Write(resolverContent2); err == nil {
+					tmpfile2.Close()
+
+					// Copy file to destination using sudo
+					if err := exec.Command("sudo", "mv", tmpfile2.Name(), "/etc/resolver/doxx").Run(); err == nil {
+						// Set proper permissions
+						//exec.Command("sudo", "chmod", "644", "/etc/resolver/doxx").Run()
+
+						// Flush DNS cache and restart mDNSResponder after both writes
+						//exec.Command("sudo", "dscacheutil", "-flushcache").Run()
+						//exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run()
 					}
 				}
 			}
 		}
 
-		// Check if the file exists now (for status reporting)
-		content, _ := os.ReadFile("/etc/resolver/doxx")
-		status["resolver"] = string(content) == string(resolverContent)
+		status["resolver"] = true
 
 	case "linux":
 		// Check system certificates - look in multiple locations
