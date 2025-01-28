@@ -77,6 +77,8 @@ type Config struct {
 	AllowPassthrough bool
 	PassThrough      bool
 	AppVersion       string
+	CustomLang       string
+	CustomTZ         string
 }
 
 var (
@@ -624,6 +626,8 @@ func parseFlags() *Config {
 	flag.Float64Var(&config.CustomLon, "lon", 0, "Custom longitude (required when using -location=custom)")
 	flag.BoolVar(&config.AllowPassthrough, "allow-passthrough", false,
 		"Allow certificate passthrough for apps with SSL pinning (e.g., Slack, Discord)")
+	flag.StringVar(&config.CustomLang, "lang", "", "Custom language (e.g., en-US, fr-FR)")
+	flag.StringVar(&config.CustomTZ, "timezone", "", "Custom timezone (e.g., America/Los_Angeles, Europe/London)")
 
 	// Custom usage message
 	flag.Usage = func() {
@@ -633,6 +637,7 @@ func parseFlags() *Config {
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  %s -location=tokyo\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -location=custom -lat=35.6762 -lon=139.6503\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -location=custom -lat=35.6762 -lon=139.6503 -lang=ja-JP -timezone=Asia/Tokyo\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -browser=firefox -location=paris\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -allow-passthrough -location=london\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Flags:\n")
@@ -766,7 +771,9 @@ func injectHeaders(req *http.Request, config *Config) {
 	req.Header.Set("User-Agent", config.UserAgent)
 
 	// Set Accept-Language based on location
-	if lang, ok := locationLanguages[config.Location]; ok {
+	if config.CustomLang != "" {
+		req.Header.Set("Accept-Language", config.CustomLang)
+	} else if lang, ok := locationLanguages[config.Location]; ok {
 		req.Header.Set("Accept-Language", lang)
 	} else {
 		// Fall back to the browser profile's default language
@@ -780,10 +787,13 @@ func injectHeaders(req *http.Request, config *Config) {
 
 	// Get base coordinates
 	var lat, lon float64
-	if config.Location == "custom" {
-		lat, lon = config.CustomLat, config.CustomLon
-	} else if loc, ok := locations[config.Location]; ok {
-		lat, lon = loc.Lat, loc.Lon
+	if config.CustomLang != "" {
+		req.Header.Set("Accept-Language", config.CustomLang)
+	} else if lang, ok := locationLanguages[config.Location]; ok {
+		req.Header.Set("Accept-Language", lang)
+	} else {
+		// Fall back to the browser profile's default language
+		req.Header.Set("Accept-Language", config.AcceptLang)
 	}
 
 	// Add jitter to coordinates
@@ -804,7 +814,12 @@ func injectGeolocationScript(resp *http.Response, config *Config) error {
 
 	if config.Location == "custom" {
 		lat, lon = config.CustomLat, config.CustomLon
-		timezone = "UTC" // Default timezone for custom locations
+		// Use custom timezone if provided, otherwise default to "UTC"
+		if config.CustomTZ != "" {
+			timezone = config.CustomTZ
+		} else {
+			timezone = "UTC"
+		}
 	} else if loc, ok := locations[config.Location]; ok {
 		lat, lon = loc.Lat, loc.Lon
 		timezone = loc.Timezone
