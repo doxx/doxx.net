@@ -41,10 +41,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -52,18 +50,6 @@ import (
 
 	"github.com/songgao/water"
 )
-
-var debug bool
-
-func init() {
-	debug = os.Getenv("DEBUG") == "1"
-}
-
-func debugLog(format string, v ...interface{}) {
-	if debug {
-		log.Printf("[HTTPS Server] "+format, v...)
-	}
-}
 
 type HTTPSTransportServer struct {
 	cert       tls.Certificate

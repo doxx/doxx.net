@@ -57,20 +57,6 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-var (
-	debugEnabled bool
-)
-
-func debugLogc(format string, args ...interface{}) {
-	if debugEnabled {
-		log.Printf("[HTTPS Client Debug] "+format, args...)
-	}
-}
-
-func SetDebug(enabled bool) {
-	debugEnabled = enabled
-}
-
 type HTTPSTransportClient struct {
 	client           *http.Client
 	serverURL        string
@@ -86,6 +72,7 @@ type HTTPSTransportClient struct {
 	lastWrite        time.Time
 	fastPath         bool // New field for latency-sensitive packets
 	originalHostname string
+	authResponse     *AuthResponse
 }
 
 type ProxyConfig struct {
@@ -296,33 +283,47 @@ func (t *HTTPSTransportClient) SendAuth(token string) error {
 	}
 	defer resp.Body.Close()
 
+	// Read and parse the response
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read auth response: %v", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		// Extract title if HTML response
-		if title := extractTitle(string(body)); title != "" {
+		if title := extractTitle(string(rawBody)); title != "" {
 			return fmt.Errorf("auth failed with status: %d, error: %s", resp.StatusCode, title)
 		}
-		// Fallback to short error if no title found
 		return fmt.Errorf("auth failed with status: %d", resp.StatusCode)
 	}
 
-	debugLogc("[HTTPS Client] Auth successful, session ID is: %s", t.sessionID)
+	debugLogc("[HTTPS Client] Raw auth response: %s", string(rawBody))
+
+	var authResp AuthResponse
+	if err := json.Unmarshal(rawBody, &authResp); err != nil {
+		return fmt.Errorf("failed to parse auth response: %v", err)
+	}
+
+	// Create a modified auth response with correct assignments
+	t.authResponse = &AuthResponse{
+		Status:             authResp.Status,
+		Message:            authResp.Message,
+		User:               authResp.User,
+		KeepEstablishedSSH: authResp.KeepEstablishedSSH,
+		KillDefaultRoute:   authResp.KillDefaultRoute,
+		AutoReconnect:      authResp.AutoReconnect,
+		EnableRouting:      authResp.EnableRouting,
+		SnarfDNS:           authResp.SnarfDNS,
+		AssignedIP:         authResp.ClientIP, // Use ClientIP for local address
+		ServerIP:           authResp.ServerIP,
+		ClientIP:           authResp.ClientIP,
+		PrefixLen:          authResp.PrefixLen,
+		Backbone:           authResp.Backbone,
+		BandwidthStats:     authResp.BandwidthStats, // Make sure we copy these
+		SecurityStats:      authResp.SecurityStats,  // Make sure we copy these
+	}
+
+	debugLogc("[HTTPS Client] Auth successful, parsed config: %+v", t.authResponse)
 	return nil
-}
-
-func extractTitle(html string) string {
-	titleStart := strings.Index(html, "<title>")
-	if titleStart == -1 {
-		return ""
-	}
-	titleStart += 7 // length of "<title>"
-
-	titleEnd := strings.Index(html[titleStart:], "</title>")
-	if titleEnd == -1 {
-		return ""
-	}
-
-	return strings.TrimSpace(html[titleStart : titleStart+titleEnd])
 }
 
 func (t *HTTPSTransportClient) ReadPacket() ([]byte, error) {
@@ -546,72 +547,55 @@ func generateRandomString(length int) string {
 	return string(b)
 }
 
-func (t *HTTPSTransportClient) CheckAuthStatus() (*AuthResponse, error) {
-	fmt.Printf("[HTTPS Client] Starting auth status check with session ID: %s\n", t.sessionID)
-
-	url := fmt.Sprintf("%s%s", t.serverURL, generateEndpointPath("auth_status"))
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
-	}
-
-	addCommonHeaders(req)
-	req.Header.Set("X-For", t.sessionID)
-
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("auth status request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("auth status failed with status: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var authResp AuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return nil, fmt.Errorf("failed to parse auth status response: %v", err)
-	}
-
-	return &authResp, nil
-}
-
 func (t *HTTPSTransportClient) HandleAuth() (*AuthResponse, error) {
-	debugLogc("[HTTPS Client] Checking auth status for session: %s", t.sessionID)
-
-	url := fmt.Sprintf("%s%s", t.serverURL, generateEndpointPath("auth_status"))
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
+	if t.authResponse == nil {
+		return nil, fmt.Errorf("no auth response available - call SendAuth first")
 	}
 
-	addCommonHeaders(req)
-	req.Host = t.originalHostname
-	req.Header.Set("X-For", t.sessionID)
-	debugLogc("[HTTPS Client] Setting X-For header to: %s", t.sessionID)
+	debugLogc("[HTTPS Client] Network Configuration:")
+	debugLogc("  - Assigned IP: %s", t.authResponse.AssignedIP)
+	debugLogc("  - Server IP: %s", t.authResponse.ServerIP)
+	debugLogc("  - Client IP: %s", t.authResponse.ClientIP)
+	debugLogc("  - Prefix Length: %d", t.authResponse.PrefixLen)
 
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("auth status request failed: %v", err)
+	// Create a complete response that includes all server settings
+	response := &AuthResponse{
+		Status:             "success",
+		ServerIP:           t.authResponse.ServerIP,
+		ClientIP:           t.authResponse.ClientIP,
+		AssignedIP:         t.authResponse.AssignedIP,
+		PrefixLen:          t.authResponse.PrefixLen,
+		KeepEstablishedSSH: t.authResponse.KeepEstablishedSSH,
+		KillDefaultRoute:   t.authResponse.KillDefaultRoute,
+		AutoReconnect:      t.authResponse.AutoReconnect,
+		EnableRouting:      t.authResponse.EnableRouting,
+		SnarfDNS:           t.authResponse.SnarfDNS,
+		Backbone:           t.authResponse.Backbone,
+		BandwidthStats:     t.authResponse.BandwidthStats,
+		SecurityStats:      t.authResponse.SecurityStats,
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("auth status failed with status: %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var authResp AuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return nil, fmt.Errorf("failed to parse auth status response: %v", err)
-	}
-
-	debugLogc("[HTTPS Client] Auth status response: %+v", authResp)
-	return &authResp, nil
+	// Clear the stored response and return the complete one
+	t.authResponse = nil
+	return response, nil
 }
 
 func (t *HTTPSTransportClient) SetOriginalHostname(hostname string) {
 	t.originalHostname = hostname
 	debugLogc("[HTTPS Client] Set original hostname to: %s", hostname)
+}
+
+func extractTitle(html string) string {
+	titleStart := strings.Index(html, "<title>")
+	if titleStart == -1 {
+		return ""
+	}
+	titleStart += 7 // length of "<title>"
+
+	titleEnd := strings.Index(html[titleStart:], "</title>")
+	if titleEnd == -1 {
+		return ""
+	}
+
+	return strings.TrimSpace(html[titleStart : titleStart+titleEnd])
 }

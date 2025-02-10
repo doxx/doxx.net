@@ -61,8 +61,7 @@ import (
 	"syscall"
 	"time"
 
-        "doxx.net/transport"  // Use local module path
-
+	transport "github.com/doxx/doxx.net/transport"
 	"github.com/jackpal/gateway"
 	psnet "github.com/shirou/gopsutil/v3/net"
 )
@@ -100,12 +99,23 @@ var (
 	lastResolvedServerIP    string
 	originalServerHost      string
 	backbone                bool
-	connectionInfoDisplayed = false // Add this new variable
+	connectionInfoDisplayed = false
+	noRouting               bool // Add this line
+
+	// Add these with the other global vars at the top
+	defaultGateway   string
+	defaultInterface string
+	defaultRouteMu   sync.Mutex
 )
 
 // Add a channel to control bandwidth monitoring
 var (
 	bandwidthMonitorStop = make(chan struct{})
+)
+
+// Make debug var accessible to other packages
+var (
+	Debug bool // Export this for use by other packages
 )
 
 func init() {
@@ -126,12 +136,22 @@ type RouteManager struct {
 	mu           sync.Mutex
 }
 
+// AuthResponse represents the server's authentication response
 type AuthResponse struct {
-	Success    bool   `json:"success"`
-	AssignedIP string `json:"assigned_ip"`
-	PrefixLen  int    `json:"prefix_len"`
-	Status     string `json:"status"`
-	Message    string `json:"message"`
+	Status             string `json:"status"`
+	Message            string `json:"message,omitempty"`
+	ServerIP           string `json:"server_ip,omitempty"`
+	ClientIP           string `json:"client_ip,omitempty"`
+	PrefixLen          int    `json:"prefix_len,omitempty"`
+	AssignedIP         string `json:"assigned_ip,omitempty"`
+	KeepEstablishedSSH bool   `json:"keep_established_ssh"`
+	KillDefaultRoute   bool   `json:"kill_default_route"`
+	AutoReconnect      bool   `json:"auto_reconnect"`
+	EnableRouting      bool   `json:"enable_routing"`
+	SnarfDNS           bool   `json:"snarf_dns"`
+	Backbone           string `json:"backbone,omitempty"`
+	BandwidthStats     string `json:"bandwidth_stats,omitempty"`
+	SecurityStats      string `json:"security_stats,omitempty"`
 }
 
 type GeoResponse struct {
@@ -157,16 +177,28 @@ type GeoResponse struct {
 }
 
 func NewRouteManager(tunIface string, killRoute bool, keepSSH bool) *RouteManager {
+	// Get the stored default route values
+	defaultRouteMu.Lock()
+	gw := defaultGateway
+	iface := defaultInterface
+	defaultRouteMu.Unlock()
+
 	return &RouteManager{
 		tunInterface: tunIface,
 		staticRoutes: make([]string, 0),
 		sshRoutes:    make([]string, 0),
 		killRoute:    killRoute,
 		keepSSH:      keepSSH,
+		defaultGW:    gw,    // Initialize with stored global value
+		defaultIface: iface, // Initialize with stored global value
 	}
 }
 
 func (rm *RouteManager) Setup(serverAddr string) error {
+	if noRouting {
+		debugLog("Routing disabled - skipping route setup")
+		return nil
+	}
 	// Extract hostname/IP from server address by removing port
 	host, port, err := net.SplitHostPort(serverAddr)
 	if err != nil {
@@ -210,9 +242,18 @@ func (rm *RouteManager) Setup(serverAddr string) error {
 		return fmt.Errorf("failed to get current default route: %v", err)
 	}
 
+	// Store globally if not already set
+	defaultRouteMu.Lock()
+	if defaultGateway == "" {
+		defaultGateway = gw
+		defaultInterface = iface
+		debugLog("Stored default route: gw=%s, iface=%s", gw, iface)
+	}
+	defaultRouteMu.Unlock()
+
 	rm.mu.Lock()
-	rm.defaultGW = gw
-	rm.defaultIface = iface
+	rm.defaultGW = defaultGateway
+	rm.defaultIface = defaultInterface
 	rm.mu.Unlock()
 
 	// Add static route for the resolved IP
@@ -723,7 +764,7 @@ func main() {
 
 	flag.StringVar(&serverAddr, "server", "", "VPN server address (host:port)")
 	flag.StringVar(&token, "token", "", "Authentication token")
-	flag.StringVar(&vpnType, "type", "tcp-encrypted", "Transport type (tcp-encrypted, or https)")
+	flag.StringVar(&vpnType, "type", "", "Transport type (tcp-encrypted, or https)")
 	flag.BoolVar(&noRouting, "no-routing", false, "Disable automatic routing")
 	flag.BoolVar(&killRoute, "kill", false, "Remove default route instead of saving it")
 	flag.StringVar(&proxyURL, "proxy", "", "Proxy URL (e.g., http://user:pass@host:port)")
@@ -735,16 +776,49 @@ func main() {
 	flag.BoolVar(&backbone, "backbone", false, "Enable backbone routing (10.0.0.0/8)") // Add this line
 	flag.Parse()
 
-	// Set debug mode in transport package
-	transport.SetDebug(debug)
+	// Update this line to set both debug vars
+	Debug = flag.Lookup("debug").Value.(flag.Getter).Get().(bool)
+	debug = Debug // Set the package-level var too
 
-	if debug {
+	if Debug {
 		log.Printf("Debug logging enabled")
 	}
 
 	if serverAddr == "" || token == "" {
 		log.Println("Error: Server address and token are required")
 		flag.Usage()
+		os.Exit(1)
+	}
+
+	// If vpnType is not provided, try to determine it from the hostname
+	if vpnType == "" {
+		host, _, err := net.SplitHostPort(serverAddr)
+		if err != nil {
+			host = serverAddr // Use full address if no port specified
+		}
+
+		// Split hostname into parts
+		parts := strings.Split(host, ".")
+		if len(parts) >= 5 && parts[len(parts)-2] == "doxx" && parts[len(parts)-1] == "net" {
+			// Format: type.location.countrycode.doxx.net
+			vpnType = parts[0]
+			debugLog("Determined transport type from hostname: %s", vpnType)
+		} else {
+			// Default to tcp-encrypted if we can't determine type
+			vpnType = "tcp-encrypted"
+			debugLog("Using default transport type: %s", vpnType)
+		}
+	}
+
+	// set the var here?
+	var routeManager *RouteManager
+
+	// Validate transport type
+	switch vpnType {
+	case "tcp-encrypted", "https":
+		debugLog("Using transport type: %s", vpnType)
+	default:
+		log.Printf("Invalid transport type: %s (must be tcp-encrypted or https)", vpnType)
 		os.Exit(1)
 	}
 
@@ -832,16 +906,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer tunDevice.Close()
-
-	// First, ensure routeManager is properly initialized before use
-	var routeManager *RouteManager
-	if !noRouting || backbone { // Initialize if either routing is enabled OR backbone is enabled
-		debugLog("Initializing route manager...")
-		routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
-		if routeManager == nil {
-			log.Fatal("Failed to initialize route manager")
-		}
-	}
 
 	// Connection loop
 	retryDelay := time.Second
@@ -1120,6 +1184,13 @@ func main() {
 
 		// Validate response
 		if response == nil || response.AssignedIP == "" || response.ServerIP == "" {
+			if debug {
+				if response == nil {
+					debugLog("Server response was nil")
+				} else {
+					debugLog("Raw server response: %+v", *response)
+				}
+			}
 			log.Printf("Invalid response from server: missing IP information, retrying in %v...", retryDelay)
 			client.Close()
 			timer := time.NewTimer(retryDelay)
@@ -1135,6 +1206,66 @@ func main() {
 				log.Println("Received interrupt signal")
 				cleanup(routeManager, client, ctx)
 				os.Exit(0)
+			}
+		}
+
+		// IMMEDIATELY set server configuration flags
+		if response.Status == "success" {
+			// Server settings ALWAYS override defaults and command-line flags
+			keepSSH = response.KeepEstablishedSSH
+			killRoute = response.KillDefaultRoute
+			noAutoReconnect = !response.AutoReconnect
+			noRouting = !response.EnableRouting
+			noBandwidth = !response.BandwidthStats
+			noSnarfDNS = !response.SnarfDNS
+			backbone = response.Backbone
+
+			if debug {
+				log.Printf("Server settings applied: keepSSH=%v, killRoute=%v, autoReconnect=%v, routing=%v, snarfDNS=%v, backbone=%v, bandwidth=%v, bandwidthStats=%v, securityStats=%v",
+					keepSSH, killRoute, !noAutoReconnect, !noRouting, snarfDNS, backbone, !noBandwidth, response.BandwidthStats, response.SecurityStats)
+			}
+
+			// Display configuration
+			fmt.Println("\n=== Server Configuration Applied ===")
+			fmt.Printf("Network Configuration:\n")
+			fmt.Printf("  • Assigned IP: %s\n", response.AssignedIP)
+			fmt.Printf("  • Server IP: %s\n", response.ServerIP)
+			fmt.Printf("  • Client IP: %s\n", response.ClientIP)
+			fmt.Printf("  • Prefix Length: %d\n", response.PrefixLen)
+
+			fmt.Printf("\nEnabled Features:\n")
+			features := []struct {
+				enabled bool
+				name    string
+			}{
+				{keepSSH, "Keep SSH Connection"},
+				{killRoute, "Kill Default Route"},
+				{!noAutoReconnect, "Auto Reconnect"},
+				{!noRouting, "IP Routing"}, // Changed from "No Routing Setup" to "IP Routing"
+				{!noSnarfDNS, "DNS Interception (dns snarfing)"},
+				{backbone, "Backbone Routing"},
+				{!noBandwidth, "Bandwidth Statistics"},
+				{response.SecurityStats, "Security Statistics"},
+			}
+
+			for _, feature := range features {
+				status := "✓"
+				if !feature.enabled {
+					status = "✗"
+				}
+				fmt.Printf("  %s %s\n", status, feature.name)
+			}
+			fmt.Println("========================")
+		}
+
+		// Now proceed with the rest of the setup using the newly applied settings
+
+		// First, ensure routeManager is properly initialized before use
+		if !noRouting || backbone { // Initialize if either routing is enabled OR backbone is enabled
+			debugLog("Initializing route manager...")
+			routeManager = NewRouteManager(tunDevice.Name(), killRoute, keepSSH)
+			if routeManager == nil {
+				log.Fatal("Failed to initialize route manager")
 			}
 		}
 
@@ -1181,7 +1312,9 @@ func main() {
 
 		// IMPORTANT: Only store the default gateway and setup routes on first connection
 		if routeManager != nil && firstConnect {
-			if !noRouting { // Only do full routing setup if -no-routing is not set
+			if noRouting {
+				debugLog("Skipping route setup - routing disabled by server configuration")
+			} else {
 				if err := routeManager.Setup(serverAddr); err != nil {
 					log.Printf("Failed to setup routing: %v", err)
 					cleanup(routeManager, client, ctx)
@@ -1502,9 +1635,16 @@ func main() {
 								exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run()
 
 								log.Printf("DNS resolver configured successfully")
+
 							}
 						}
 					}
+				}
+				// Add DNS swap after resolver configuration
+				if err := swapDNSServerOrder(); err != nil {
+					debugLog("Warning: Failed to swap DNS servers: %v", err)
+				} else {
+					debugLog("Successfully swapped DNS server order")
 				}
 			}
 
@@ -2091,9 +2231,9 @@ func (rm *RouteManager) removeStaticRoute(dst string) error {
 	}
 }
 
-func debugLog(format string, v ...interface{}) {
-	if debug {
-		log.Printf("[DEBUG] "+format, v...)
+func debugLog(format string, args ...interface{}) {
+	if Debug {
+		log.Printf("[debugLog] "+format, args...)
 	}
 }
 
@@ -2427,11 +2567,6 @@ func rewriteDNSPacket(packet []byte, serverIP net.IP, natTable *DNSNatTable, tun
 	srcPort := uint16(packet[20])<<8 | uint16(packet[21])
 	dstPort := uint16(packet[22])<<8 | uint16(packet[23])
 	queryID := uint16(packet[28])<<8 | uint16(packet[29])
-
-	if debug {
-		debugLog("Processing packet - src=%v:%d dst=%v:%d queryID=%d",
-			srcIP, srcPort, dstIP, dstPort, queryID)
-	}
 
 	// Handle DNS response (source port must be 53)
 	if srcPort == DNS_PORT && bytes.Equal(srcIP.To4(), serverIP.To4()) {
@@ -3279,4 +3414,105 @@ func resolveServerAddress(serverAddr string) (*ServerInfo, error) {
 	}
 
 	return nil, fmt.Errorf("no IPv4 addresses found for %s", host)
+
+}
+
+// swapDNSServerOrder swaps the order of DNS servers on all network interfaces
+// that have multiple DNS servers configured.
+func swapDNSServerOrder() error {
+	// Get list of network services
+	out, err := exec.Command("networksetup", "-listallnetworkservices").Output()
+	if err != nil {
+		return fmt.Errorf("failed to list network services: %v", err)
+	}
+
+	// Split output into lines and skip the first line (header)
+	services := strings.Split(string(out), "\n")[1:]
+	swappedCount := 0
+
+	for _, service := range services {
+		// Skip empty lines and disabled services (marked with *)
+		if service == "" || strings.HasPrefix(service, "*") {
+			continue
+		}
+
+		debugLog("Checking DNS servers on %s...", service)
+
+		// Get current DNS servers
+		dnsOut, err := exec.Command("networksetup", "-getdnsservers", service).Output()
+		if err != nil {
+			debugLog("Error getting DNS servers for %s: %v", service, err)
+			continue
+		}
+
+		dnsServers := strings.TrimSpace(string(dnsOut))
+
+		// Skip if no DNS servers or error
+		if strings.Contains(dnsServers, "aren't any DNS Servers") ||
+			strings.Contains(dnsServers, "Error") {
+			debugLog("No DNS servers on %s", service)
+			continue
+		}
+
+		// Split DNS servers into slice
+		servers := strings.Split(dnsServers, "\n")
+
+		// Only process if we have at least 2 DNS servers
+		if len(servers) >= 2 {
+			debugLog("Current DNS servers on %s: %v", service, servers)
+
+			// Create reversed slice of servers
+			reversed := make([]string, len(servers))
+			for i := 0; i < len(servers); i++ {
+				reversed[i] = servers[len(servers)-1-i]
+			}
+
+			debugLog("Swapping order to: %v", reversed)
+
+			// Convert slice to args
+			args := append([]string{"-setdnsservers", service}, reversed...)
+			cmd := exec.Command("networksetup", args...)
+			if err := cmd.Run(); err != nil {
+				debugLog("Error setting DNS servers for %s: %v", service, err)
+				continue
+			}
+			debugLog("Successfully swapped DNS servers for %s", service)
+			swappedCount++
+		} else {
+			debugLog("Only one DNS server configured on %s: %s", service, dnsServers)
+		}
+	}
+
+	if swappedCount > 0 {
+		// Flush DNS cache after making changes
+		if err := exec.Command("sudo", "dscacheutil", "-flushcache").Run(); err != nil {
+			debugLog("Warning: Failed to flush DNS cache: %v", err)
+		}
+		if err := exec.Command("sudo", "killall", "-HUP", "mDNSResponder").Run(); err != nil {
+			debugLog("Warning: Failed to restart mDNSResponder: %v", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("no interfaces found with multiple DNS servers to swap")
+}
+
+// Add this where we process the auth response
+func handleAuthResponse(resp []byte) (*AuthResponse, error) {
+	debugLog("Received auth response from server: %s", string(resp))
+
+	var authResp AuthResponse
+	if err := json.Unmarshal(resp, &authResp); err != nil {
+		debugLog("Failed to parse auth response: %v", err)
+		return nil, fmt.Errorf("failed to parse auth response: %v", err)
+	}
+
+	debugLog("Parsed auth response: %+v", authResp)
+
+	if authResp.Status != "success" {
+		debugLog("Auth failed: %s", authResp.Message)
+		return nil, fmt.Errorf("authentication failed: %s", authResp.Message)
+	}
+
+	return &authResp, nil
 }

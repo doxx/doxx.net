@@ -79,13 +79,21 @@ type TransportConn interface {
 
 // AuthResponse represents the server's authentication response
 type AuthResponse struct {
-	Status     string  `json:"status"`
-	Message    string  `json:"message"`
-	User       VPNUser `json:"user"`
-	ServerIP   string  `json:"server_ip,omitempty"`
-	ClientIP   string  `json:"client_ip,omitempty"`
-	PrefixLen  int     `json:"prefix_len,omitempty"`
-	AssignedIP string  `json:"assigned_ip,omitempty"`
+	Status             string  `json:"status"`
+	Message            string  `json:"message"`
+	User               VPNUser `json:"user"`
+	ServerIP           string  `json:"server_ip,omitempty"`
+	ClientIP           string  `json:"client_ip,omitempty"`
+	PrefixLen          int     `json:"prefix_len,omitempty"`
+	AssignedIP         string  `json:"assigned_ip,omitempty"`
+	KeepEstablishedSSH bool    `json:"keep_established_ssh"`
+	KillDefaultRoute   bool    `json:"kill_default_route"`
+	AutoReconnect      bool    `json:"auto_reconnect"`
+	EnableRouting      bool    `json:"enable_routing"`
+	SnarfDNS           bool    `json:"snarf_dns"`
+	Backbone           bool    `json:"backbone"`
+	BandwidthStats     bool    `json:"bandwidth_stats"`
+	SecurityStats      bool    `json:"security_stats"`
 }
 
 // Common utility functions
@@ -141,4 +149,34 @@ type VPNUser struct {
 	Active       bool   `json:"active"`
 	Server       string `json:"server"`
 	PrefixLen    int    // This is parsed from AssignedIP
+}
+
+func displayServerConfig(config RuntimeConfig) {
+	fmt.Println("\n=== Server Configuration ===")
+	fmt.Printf("Network Configuration:\n")
+	fmt.Printf("  • Assigned IP: %s\n", config.AssignedIP)
+	fmt.Printf("  • Server IP: %s\n", config.ServerIP)
+	fmt.Printf("  • Client IP: %s\n", config.ClientIP)
+	fmt.Printf("  • Prefix Length: %d\n", config.PrefixLen)
+
+	fmt.Printf("\nEnabled Features:\n")
+	features := []struct {
+		enabled bool
+		name    string
+	}{
+		{config.KeepEstablishedSSH, "Keep SSH Connection"},
+		{config.KillDefaultRoute, "Kill Default Route"},
+		{config.AutoReconnect, "Auto Reconnect"},
+		{config.EnableRouting, "IP Routing"},
+		{config.SnarfDNS, "DNS Interception"},
+	}
+
+	for _, feature := range features {
+		status := "✓"
+		if !feature.enabled {
+			status = "✗"
+		}
+		fmt.Printf("  %s %s\n", status, feature.name)
+	}
+	fmt.Println("========================")
 }
