@@ -26,44 +26,64 @@ endif
 
 .PHONY: all clean install get-wintun
 
-all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) doxxulator-all doxxulator-mac-universal
+all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) freebsd-amd64 freebsd-arm64 openbsd-amd64 openbsd-arm64 doxxulator-all
 
 clean:
 	rm -rf $(BINARY_DIR)
 	mkdir -p $(BINARY_DIR)
 
 linux-amd64:
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net-linux-amd64 $(COMMON_SOURCES) tun_other.go
+	@mkdir -p $(BINARY_DIR)/Linux/amd64
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/Linux/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
 
 linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-linux-arm64 $(COMMON_SOURCES) tun_other.go
+	@mkdir -p $(BINARY_DIR)/Linux/arm64
+	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/Linux/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
+
+freebsd-amd64:
+	@mkdir -p $(BINARY_DIR)/FreeBSD/amd64
+	GOOS=freebsd GOARCH=amd64 go build -o $(BINARY_DIR)/FreeBSD/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
+
+freebsd-arm64:
+	@mkdir -p $(BINARY_DIR)/FreeBSD/arm64
+	GOOS=freebsd GOARCH=arm64 go build -o $(BINARY_DIR)/FreeBSD/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
+
+openbsd-amd64:
+	@mkdir -p $(BINARY_DIR)/OpenBSD/amd64
+	GOOS=openbsd GOARCH=amd64 go build -o $(BINARY_DIR)/OpenBSD/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
+
+openbsd-arm64:
+	@mkdir -p $(BINARY_DIR)/OpenBSD/arm64
+	GOOS=openbsd GOARCH=arm64 go build -o $(BINARY_DIR)/OpenBSD/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
 
 windows-amd64: get-wintun
 	@echo "Building for Windows AMD64..."
-	@mkdir -p $(BINARY_DIR)
+	@mkdir -p $(BINARY_DIR)/Windows/amd64
 	@mkdir -p assets/windows
-	@cp assets/windows/wintun-amd64.dll assets/windows/wintun.dll
-	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net-amd64.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
+	@cp assets/windows/wintun-amd64.dll $(BINARY_DIR)/Windows/amd64/wintun.dll
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/Windows/amd64/doxx.net.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
 
 windows-arm64: get-wintun
 	@echo "Building for Windows ARM64..."
-	@mkdir -p $(BINARY_DIR)
+	@mkdir -p $(BINARY_DIR)/Windows/arm64
 	@mkdir -p assets/windows
-	@cp assets/windows/wintun-arm64.dll assets/windows/wintun.dll
-	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-arm64.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
+	@cp assets/windows/wintun-arm64.dll $(BINARY_DIR)/Windows/arm64/wintun.dll
+	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/Windows/arm64/doxx.net.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
 
 mac-amd64:
-	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/doxx.net-darwin-amd64 $(COMMON_SOURCES) tun_other.go
+	@mkdir -p $(BINARY_DIR)/MacOS/amd64
+	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/MacOS/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
 
 mac-arm64:
-	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/doxx.net-darwin-arm64 $(COMMON_SOURCES) tun_other.go
+	@mkdir -p $(BINARY_DIR)/MacOS/arm64
+	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/MacOS/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
 
 mac-universal: mac-amd64 mac-arm64
 	@echo "Creating universal binaries for macOS..."
-	@mkdir -p $(BINARY_DIR)
-	lipo -create -output $(BINARY_DIR)/doxx.net-mac \
-		$(BINARY_DIR)/doxx.net-darwin-amd64 \
-		$(BINARY_DIR)/doxx.net-darwin-arm64
+	@mkdir -p $(BINARY_DIR)/MacOS
+	lipo -create -output $(BINARY_DIR)/MacOS/doxx.net \
+		$(BINARY_DIR)/MacOS/amd64/doxx.net \
+		$(BINARY_DIR)/MacOS/arm64/doxx.net
 	@echo "Universal binaries created successfully"
 
 get-wintun:
@@ -90,27 +110,50 @@ get-wintun:
 	fi
 
 doxxulator-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/doxxulator-linux-amd64 $(DOXXULATOR_SOURCE)
+	@mkdir -p $(BINARY_DIR)/Linux/amd64
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/Linux/amd64/doxxulator $(DOXXULATOR_SOURCE)
 
 doxxulator-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/doxxulator-linux-arm64 $(DOXXULATOR_SOURCE)
+	@mkdir -p $(BINARY_DIR)/Linux/arm64
+	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/Linux/arm64/doxxulator $(DOXXULATOR_SOURCE)
+
+doxxulator-freebsd-amd64:
+	@mkdir -p $(BINARY_DIR)/FreeBSD/amd64
+	GOOS=freebsd GOARCH=amd64 go build -o $(BINARY_DIR)/FreeBSD/amd64/doxxulator $(DOXXULATOR_SOURCE)
+
+doxxulator-freebsd-arm64:
+	@mkdir -p $(BINARY_DIR)/FreeBSD/arm64
+	GOOS=freebsd GOARCH=arm64 go build -o $(BINARY_DIR)/FreeBSD/arm64/doxxulator $(DOXXULATOR_SOURCE)
+
+doxxulator-openbsd-amd64:
+	@mkdir -p $(BINARY_DIR)/OpenBSD/amd64
+	GOOS=openbsd GOARCH=amd64 go build -o $(BINARY_DIR)/OpenBSD/amd64/doxxulator $(DOXXULATOR_SOURCE)
+
+doxxulator-openbsd-arm64:
+	@mkdir -p $(BINARY_DIR)/OpenBSD/arm64
+	GOOS=openbsd GOARCH=arm64 go build -o $(BINARY_DIR)/OpenBSD/arm64/doxxulator $(DOXXULATOR_SOURCE)
 
 doxxulator-windows-amd64:
-	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/doxxulator-amd64.exe $(DOXXULATOR_SOURCE)
+	@mkdir -p $(BINARY_DIR)/Windows/amd64
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/Windows/amd64/doxxulator.exe $(DOXXULATOR_SOURCE)
 
 doxxulator-windows-arm64:
-	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/doxxulator-arm64.exe $(DOXXULATOR_SOURCE)
+	@mkdir -p $(BINARY_DIR)/Windows/arm64
+	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/Windows/arm64/doxxulator.exe $(DOXXULATOR_SOURCE)
 
 doxxulator-mac-amd64:
-	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/doxxulator-darwin-amd64 $(DOXXULATOR_SOURCE)
+	@mkdir -p $(BINARY_DIR)/MacOS/amd64
+	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/MacOS/amd64/doxxulator $(DOXXULATOR_SOURCE)
 
 doxxulator-mac-arm64:
-	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/doxxulator-darwin-arm64 $(DOXXULATOR_SOURCE)
+	@mkdir -p $(BINARY_DIR)/MacOS/arm64
+	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/MacOS/arm64/doxxulator $(DOXXULATOR_SOURCE)
 
 doxxulator-mac-universal: doxxulator-mac-amd64 doxxulator-mac-arm64
 	@echo "Creating universal binaries for doxxulator macOS..."
-	lipo -create -output $(BINARY_DIR)/doxxulator-mac \
-		$(BINARY_DIR)/doxxulator-darwin-amd64 \
-		$(BINARY_DIR)/doxxulator-darwin-arm64
+	@mkdir -p $(BINARY_DIR)/MacOS
+	lipo -create -output $(BINARY_DIR)/MacOS/doxxulator \
+		$(BINARY_DIR)/MacOS/amd64/doxxulator \
+		$(BINARY_DIR)/MacOS/arm64/doxxulator
 
-doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 $(MAC_BUILD)
+doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 doxxulator-freebsd-amd64 doxxulator-freebsd-arm64 doxxulator-openbsd-amd64 doxxulator-openbsd-arm64 $(MAC_BUILD)
