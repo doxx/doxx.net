@@ -24,9 +24,9 @@ else
     MAC_BUILD := mac-amd64 mac-arm64
 endif
 
-.PHONY: all clean install get-wintun
+.PHONY: all clean install get-wintun zip-all
 
-all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) freebsd-amd64 freebsd-arm64 openbsd-amd64 openbsd-arm64 doxxulator-all
+all: clean linux-amd64 linux-arm64 windows-amd64 windows-arm64 $(MAC_BUILD) freebsd-amd64 freebsd-arm64 openbsd-amd64 openbsd-arm64 doxxulator-all zip-all
 
 clean:
 	rm -rf $(BINARY_DIR)
@@ -157,3 +157,25 @@ doxxulator-mac-universal: doxxulator-mac-amd64 doxxulator-mac-arm64
 		$(BINARY_DIR)/MacOS/arm64/doxxulator
 
 doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 doxxulator-freebsd-amd64 doxxulator-freebsd-arm64 doxxulator-openbsd-amd64 doxxulator-openbsd-arm64 $(MAC_BUILD)
+
+zip-all: zip-windows zip-linux zip-macos zip-freebsd zip-openbsd
+
+zip-windows:
+	@echo "Zipping Windows binaries..."
+	@cd $(BINARY_DIR) && zip -r doxx.net-Windows10-11.zip Windows/
+
+zip-linux:
+	@echo "Zipping Linux binaries..."
+	@cd $(BINARY_DIR) && zip -r doxx.net-Linux.zip Linux/
+
+zip-macos:
+	@echo "Zipping MacOS binaries..."
+	@cd $(BINARY_DIR) && zip -r doxx.net-macOS.zip MacOS/
+
+zip-freebsd:
+	@echo "Zipping FreeBSD binaries..."
+	@cd $(BINARY_DIR) && zip -r doxx.net-FreeBSD.zip FreeBSD/
+
+zip-openbsd:
+	@echo "Zipping OpenBSD binaries..."
+	@cd $(BINARY_DIR) && zip -r doxx.net-OpenBSD.zip OpenBSD/
