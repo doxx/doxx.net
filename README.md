@@ -3,17 +3,12 @@ title: "doxx.net Documentation"
 description: "Advanced VPN, Parallel Internet, and De-Location Platform"
 date: 2024-01-01
 ---
-```
-    _______                ___                    __   
-    \____  \  ____  ___  ___  \__   ____   ____ _/  |_ 
-     |  |\  \/  _ \ \  \/  /\   /  /    \ /  __\\   __\
-     |  |/   ( <_> ) >    </    \ |   |  (  ___)|  |  
-    /_______  \____/ /__/\_  /\__/|___|  /\____/|__|  
-            \_/           \_/         \_/               
-     [ Copyright (c) Barrett Lyon 2024-2025 - https://doxx.net ]
-```
+
+![doxx.net](/assets/doxx.net.logo.jpg)
 
 For detailed documentation, please visit the [doxx.net documentation site](https://docs.doxx.net).
+
+✨ **Join the FREE BETA!** ✨ Experience the future of privacy and security by visiting [**beta.doxx.net**](https://beta.doxx.net)
 
 # **doxx.net (BETA): Advanced VPN, Parallel Internet, and De-Location Platform**
 
@@ -59,7 +54,9 @@ For detailed documentation, please visit the [doxx.net documentation site](https
 - **Static DARKNET IP Assignment:** Maintain consistent IP addresses on the darknet for stable and predictable connections. Doxx.net to the Internet egress IPs are not static.  
 - **Certificate Pinning:** Enhanced security through strict certificate validation, mitigating man-in-the-middle attacks.  
 - **Cross-Platform Compatibility:** Operates smoothly on **Linux**, **macOS**, and **Windows**, catering to a wide range of user environments.  
-- **Cloudflare CDN Integration:** Utilize **Cloudflare's extensive CDN infrastructure** to further obfuscate your traffic, making it indistinguishable from legitimate web requests.  
+- **Cloudflare CDN Integration:** Utilize **Cloudflare's extensive CDN infrastructure** to further obfuscate your traffic, making it indistinguishable from legitimate web requests. 
+- **Security Console:** Real-time visability across your tunnels.
+    ![Security Console Interface](/assets/security_console.gif)
 ---
 
 Where most VPNs act more like a proxy, doxx.net is a true parallel internet. You can currently connect to the doxx.net network using either the propritary doxx.net client or a WireGuard® client. Once connected, you can create your own private network infrastructure, operate services entirely within the alternative internet, and no dependence on public domain registrars.
