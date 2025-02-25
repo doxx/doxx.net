@@ -156,7 +156,7 @@ doxxulator-mac-universal: doxxulator-mac-amd64 doxxulator-mac-arm64
 		$(BINARY_DIR)/MacOS/amd64/doxxulator \
 		$(BINARY_DIR)/MacOS/arm64/doxxulator
 
-doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 doxxulator-freebsd-amd64 doxxulator-freebsd-arm64 doxxulator-openbsd-amd64 doxxulator-openbsd-arm64 $(MAC_BUILD)
+doxxulator-all: doxxulator-linux-amd64 doxxulator-linux-arm64 doxxulator-windows-amd64 doxxulator-windows-arm64 doxxulator-freebsd-amd64 doxxulator-freebsd-arm64 doxxulator-openbsd-amd64 doxxulator-openbsd-arm64 doxxulator-mac-amd64 doxxulator-mac-arm64 doxxulator-mac-universal
 
 zip-all: zip-windows zip-linux zip-macos zip-freebsd zip-openbsd
 
