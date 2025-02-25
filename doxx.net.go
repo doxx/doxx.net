@@ -803,6 +803,10 @@ func main() {
 			// Format: type.location.countrycode.doxx.net
 			vpnType = parts[0]
 			debugLog("Determined transport type from hostname: %s", vpnType)
+		} else if strings.HasPrefix(host, "cdn") || strings.Contains(host, ".cdn.") {
+			// Special case for CDN hostnames - they use HTTPS
+			vpnType = "https"
+			debugLog("Detected CDN hostname, using HTTPS transport")
 		} else {
 			// Default to tcp-encrypted if we can't determine type
 			vpnType = "tcp-encrypted"
