@@ -43,7 +43,7 @@ Command line options are overwritten by a0x13.doxx.net "Advanced User Installati
 
 With proper a0x13.doxx.net tunnel configuration, the doxx.net client will configure automaticly.
 
-See [docs.doxx.net/advanced-features/](https://docs.doxx.net/advanced-features/) for more information on the a0x13.doxx.net "Advanced User Installation" options.
+See [docs.doxx.net/vpn_clients/advanced-features/](https://docs.doxx.net/vpn_clients/advanced-features/) for more information on the a0x13.doxx.net "Advanced User Installation" options.
 
 Pro tip: The olny required options are -token and -server.
 
