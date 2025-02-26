@@ -4,7 +4,7 @@
 
 ✨ **Join the FREE BETA!** ✨ Experience the future of privacy and security by visiting [**beta.doxx.net**](https://beta.doxx.net)
 
-doxx.net is a comprehensive privacy and security platform combining a high-performance VPN service with a parallel internet featuring advanced location management capabilities. Users can connect to the doxx.net network through the dedicated client using vpn over: [https, https over CDN, tcp](/vpn_clients/doxx.net/), or [WireGuard](/vpn_clients/wireguard) which uses standard UDP. For optimal performance with low latency, the WireGuard connection is recommended. In network environments with high restrictions, the TCP or HTTPS or HTTPS over CDN VPN connection is recommended.
+doxx.net is a comprehensive privacy and security platform combining a high-performance VPN service with a parallel internet featuring advanced location management capabilities. Users can connect to the doxx.net network through the dedicated client using vpn over: [https, https over CDN, tcp](https://docs.doxx.net/vpn_clients/doxx.net/), or [WireGuard](https://docs.doxx.net/vpn_clients/wireguard) which uses standard UDP. For optimal performance with low latency, the WireGuard connection is recommended. In network environments with high restrictions, the TCP or HTTPS or HTTPS over CDN VPN connection is recommended.
 
 Importantly, doxx.net goes beyond a traditional VPN—while the VPN provides entry into the network, the real value lies within the secured, encrypted mesh network. Once connected, users can seamlessly access .doxx domains, utilize the dedicated gTLD, and leverage secure hosting. This mesh network enables secure interaction with other users and applications directly within doxx.net.
 
@@ -70,9 +70,9 @@ Client B (10.1.2.3) <--+      +------------+
 - Secure and private communication channels
   
 #### Cool Portal Features
-doxx.net features a real-time [security console](/a0x13/security-console) that delivers enriched data without compromising your privacy or exposing your data.
+doxx.net features a real-time [security console](https://docs.doxx.net/a0x13/security-console) that delivers enriched data without compromising your privacy or exposing your data.
 
-![Security Console Interface](/assets/security_console.gif)
+![Security Console Interface](https://docs.doxx.net/assets/security_console.gif)
 
 ---
 
@@ -88,7 +88,3 @@ It's pretty easy: You can use the [a0x13.doxx.net](https://a0x13.doxx.net) porta
 ## Community
 
 We are more than just a VPN. We are a community of like-minded individuals who are passionate about privacy and security. Software development is on-going and features are still being created. Join our community on [Discord](https://discord.gg/Gr9rByrEzZ) for support and updates.
-
----
-
-*WireGuard is a registered trademark of Jason A. Donenfeld.* 
