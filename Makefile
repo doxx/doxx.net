@@ -1,12 +1,12 @@
 BINARY_DIR=bin
 INSTALL_DIR=/sbin
 SYSTEMD_DIR=/etc/systemd/system
-COMMON_SOURCES=doxx.net.go tun_interface.go
-WINDOWS_SOURCES=tun_windows.go embed_windows.go
+COMMON_SOURCES=./doxx.net/doxx.net.go ./doxx.net/tun_interface.go
+WINDOWS_SOURCES=./doxx.net/tun_windows.go ./doxx.net/embed_windows.go
 WINTUN_VERSION := 0.14.1
 WINTUN_URL := https://www.wintun.net/builds/wintun-$(WINTUN_VERSION).zip
 WINTUN_SHA256 := 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
-DOXXULATOR_SOURCE=doxxulator.go
+DOXXULATOR_SOURCE=./doxxulator/doxxulator.go
 
 # Detect OS for sha256 command and check format
 UNAME_S := $(shell uname -s)
@@ -34,49 +34,49 @@ clean:
 
 linux-amd64:
 	@mkdir -p $(BINARY_DIR)/Linux/amd64
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/Linux/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/Linux/amd64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 linux-arm64:
 	@mkdir -p $(BINARY_DIR)/Linux/arm64
-	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/Linux/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/Linux/arm64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 freebsd-amd64:
 	@mkdir -p $(BINARY_DIR)/FreeBSD/amd64
-	GOOS=freebsd GOARCH=amd64 go build -o $(BINARY_DIR)/FreeBSD/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=freebsd GOARCH=amd64 go build -o $(BINARY_DIR)/FreeBSD/amd64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 freebsd-arm64:
 	@mkdir -p $(BINARY_DIR)/FreeBSD/arm64
-	GOOS=freebsd GOARCH=arm64 go build -o $(BINARY_DIR)/FreeBSD/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=freebsd GOARCH=arm64 go build -o $(BINARY_DIR)/FreeBSD/arm64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 openbsd-amd64:
 	@mkdir -p $(BINARY_DIR)/OpenBSD/amd64
-	GOOS=openbsd GOARCH=amd64 go build -o $(BINARY_DIR)/OpenBSD/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=openbsd GOARCH=amd64 go build -o $(BINARY_DIR)/OpenBSD/amd64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 openbsd-arm64:
 	@mkdir -p $(BINARY_DIR)/OpenBSD/arm64
-	GOOS=openbsd GOARCH=arm64 go build -o $(BINARY_DIR)/OpenBSD/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=openbsd GOARCH=arm64 go build -o $(BINARY_DIR)/OpenBSD/arm64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 windows-amd64: get-wintun
 	@echo "Building for Windows AMD64..."
 	@mkdir -p $(BINARY_DIR)/Windows/amd64
-	@mkdir -p assets/windows
-	@cp assets/windows/wintun-amd64.dll $(BINARY_DIR)/Windows/amd64/wintun.dll
+	@mkdir -p doxx.net/assets/windows
+	@cp doxx.net/assets/windows/wintun-amd64.dll $(BINARY_DIR)/Windows/amd64/wintun.dll
 	GOOS=windows GOARCH=amd64 go build -o $(BINARY_DIR)/Windows/amd64/doxx.net.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
 
 windows-arm64: get-wintun
 	@echo "Building for Windows ARM64..."
 	@mkdir -p $(BINARY_DIR)/Windows/arm64
-	@mkdir -p assets/windows
-	@cp assets/windows/wintun-arm64.dll $(BINARY_DIR)/Windows/arm64/wintun.dll
+	@mkdir -p doxx.net/assets/windows
+	@cp doxx.net/assets/windows/wintun-arm64.dll $(BINARY_DIR)/Windows/arm64/wintun.dll
 	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/Windows/arm64/doxx.net.exe $(COMMON_SOURCES) $(WINDOWS_SOURCES)
 
 mac-amd64:
 	@mkdir -p $(BINARY_DIR)/MacOS/amd64
-	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/MacOS/amd64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DIR)/MacOS/amd64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 mac-arm64:
 	@mkdir -p $(BINARY_DIR)/MacOS/arm64
-	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/MacOS/arm64/doxx.net $(COMMON_SOURCES) tun_other.go
+	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DIR)/MacOS/arm64/doxx.net $(COMMON_SOURCES) ./doxx.net/tun_other.go
 
 mac-universal: mac-amd64 mac-arm64
 	@echo "Creating universal binaries for macOS..."
@@ -89,24 +89,24 @@ mac-universal: mac-amd64 mac-arm64
 get-wintun:
 	@echo "Downloading Wintun $(WINTUN_VERSION)..."
 	@echo "Download URL: $(WINTUN_URL)"
-	@mkdir -p assets/windows
-	@if [ ! -f "assets/windows/wintun-amd64.dll" ] || [ ! -f "assets/windows/wintun-arm64.dll" ]; then \
+	@mkdir -p doxx.net/assets/windows
+	@if [ ! -f "doxx.net/assets/windows/wintun-amd64.dll" ] || [ ! -f "doxx.net/assets/windows/wintun-arm64.dll" ]; then \
 		echo "Downloading Wintun..." && \
 		curl -L -o wintun.zip $(WINTUN_URL) && \
 		echo "Verifying checksum..." && \
 		$(SHA256_CHECK) && \
 		echo "Extracting AMD64 version..." && \
-		unzip -j wintun.zip "wintun/bin/amd64/wintun.dll" -d assets/windows/ && \
-		mv assets/windows/wintun.dll assets/windows/wintun-amd64.dll && \
+		unzip -j wintun.zip "wintun/bin/amd64/wintun.dll" -d doxx.net/assets/windows/ && \
+		mv doxx.net/assets/windows/wintun.dll doxx.net/assets/windows/wintun-amd64.dll && \
 		echo "Extracting ARM64 version..." && \
-		unzip -j wintun.zip "wintun/bin/arm64/wintun.dll" -d assets/windows/ && \
-		mv assets/windows/wintun.dll assets/windows/wintun-arm64.dll && \
+		unzip -j wintun.zip "wintun/bin/arm64/wintun.dll" -d doxx.net/assets/windows/ && \
+		mv doxx.net/assets/windows/wintun.dll doxx.net/assets/windows/wintun-arm64.dll && \
 		rm wintun.zip && \
 		echo "Verifying extracted files:" && \
-		ls -l assets/windows/wintun-*.dll; \
+		ls -l doxx.net/assets/windows/wintun-*.dll; \
 	else \
 		echo "DLL files already exist:" && \
-		ls -l assets/windows/wintun-*.dll; \
+		ls -l doxx.net/assets/windows/wintun-*.dll; \
 	fi
 
 doxxulator-linux-amd64:
