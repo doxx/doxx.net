@@ -802,11 +802,10 @@ func main() {
 		if len(parts) >= 5 && parts[len(parts)-2] == "doxx" && parts[len(parts)-1] == "net" {
 			// Format: type.location.countrycode.doxx.net
 			vpnType = parts[0]
+			if vpnType == "cdn" {
+				vpnType = "https"
+			}
 			debugLog("Determined transport type from hostname: %s", vpnType)
-		} else if strings.HasPrefix(host, "cdn") || strings.Contains(host, ".cdn.") {
-			// Special case for CDN hostnames - they use HTTPS
-			vpnType = "https"
-			debugLog("Detected CDN hostname, using HTTPS transport")
 		} else {
 			// Default to tcp-encrypted if we can't determine type
 			vpnType = "tcp-encrypted"
@@ -819,7 +818,7 @@ func main() {
 
 	// Validate transport type
 	switch vpnType {
-	case "tcp-encrypted", "https", "cdn":
+	case "tcp-encrypted", "https":
 		debugLog("Using transport type: %s", vpnType)
 	default:
 		log.Printf("Invalid transport type: %s (must be tcp-encrypted or https)", vpnType)
@@ -997,8 +996,7 @@ func main() {
 				cleanup(routeManager, client, ctx)
 				os.Exit(0)
 			}
-		case "https":
-		case "cdn":
+		case "https", "cdn":
 			var proxyConfig *transport.ProxyConfig
 			if proxyURL != "" {
 				proxyConfig, err = transport.ParseProxyURL(proxyURL)
