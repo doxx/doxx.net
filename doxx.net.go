@@ -819,7 +819,7 @@ func main() {
 
 	// Validate transport type
 	switch vpnType {
-	case "tcp-encrypted", "https":
+	case "tcp-encrypted", "https", "cdn":
 		debugLog("Using transport type: %s", vpnType)
 	default:
 		log.Printf("Invalid transport type: %s (must be tcp-encrypted or https)", vpnType)
@@ -998,6 +998,7 @@ func main() {
 				os.Exit(0)
 			}
 		case "https":
+		case "cdn":
 			var proxyConfig *transport.ProxyConfig
 			if proxyURL != "" {
 				proxyConfig, err = transport.ParseProxyURL(proxyURL)
