@@ -1,10 +1,3 @@
----
-title: "doxx.net Documentation"
-description: "Advanced VPN, Parallel Internet, and De-Location Platform"
-date: 2024-01-01
-weight: 1
----
-
 ![doxx.net logo](/assets/doxx.net.logo.png)
 
 # **doxx.net (BETA): Advanced VPN, Parallel Internet, and De-Location Platform**

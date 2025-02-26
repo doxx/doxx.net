@@ -1,11 +1,3 @@
----
-title: "doxx.net"
-weight: 1
-menu:
-  main:
-    parent: "VPN Clients"
----
-
 ## Overview
 doxx.net is a secure networking client designed for privacy-conscious users. The client provides encrypted VPN connectivity with advanced features including DNS protection, safe bandwidth monitoring, and TCP and HTTPS based transports for stealthy connectivity. 
 

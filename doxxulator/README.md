@@ -1,13 +1,3 @@
----
-title: doxxulator
-weight: 10
-menu:
-  main:
-    parent: "Tools"
----
-
-[github.com/doxx/doxx.net/doxxulator](https://github.com/doxx/doxx.net/doxxulator)
-
 ## Overview
 
 doxxulator is a powerful tool designed to emulate various browsers and geographic locations, providing enhanced privacy and flexibility in your browsing experience. It integrates seamlessly with the doxx.net client to deliver secure and customized web interactions.
