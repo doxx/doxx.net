@@ -1580,8 +1580,12 @@ func main() {
 
 					// Create new context for the next connection attempt
 					ctx, cancel = context.WithCancel(context.Background())
-					return
 
+					// Reset signal handling for the new context
+					signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+					signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+					return
 				case <-sigChan:
 					log.Println("Received interrupt signal")
 					cleanup(routeManager, client, ctx)
