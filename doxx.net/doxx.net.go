@@ -1121,6 +1121,24 @@ func main() {
 		// Reset delay on successful connection
 		retryDelay = time.Second
 
+		// Create a context with cancellation for this operation
+		authCtx, authCancel := context.WithCancel(ctx)
+
+		// Setup a goroutine to handle Ctrl+C during reconnect messaging and authentication
+		authDone := make(chan struct{})
+		go func() {
+			select {
+			case <-sigChan:
+				log.Println("Received interrupt signal")
+				authCancel()
+				cleanup(routeManager, client, ctx)
+				os.Exit(0)
+			case <-authDone:
+				// Authentication completed successfully
+				return
+			}
+		}()
+
 		var reconnectMessages = []string{
 			"Awoooga! We're back on doxx.net! 🚀",
 			"Hot dog! doxx.net is alive again! 🌭",
@@ -1144,10 +1162,20 @@ func main() {
 		randomIndex := rand.Intn(len(reconnectMessages))
 		log.Printf(reconnectMessages[randomIndex])
 
+		// Check if context was cancelled
+		if authCtx.Err() != nil {
+			// Context was cancelled, no need to continue
+			return
+		}
+
 		// Send authentication token
 		if err := client.SendAuth(token); err != nil {
 			log.Printf("Failed to send authentication token: %v, retrying in %v...", err, retryDelay)
 			client.Close()
+			authCancel()
+			close(authDone)
+
+			// Use timer for retry delay with interrupt handling
 			timer := time.NewTimer(retryDelay)
 			select {
 			case <-timer.C:
@@ -1169,6 +1197,8 @@ func main() {
 		if err != nil {
 			log.Printf("Authentication failed: %v, retrying in %v...", err, retryDelay)
 			client.Close()
+			authCancel()
+			close(authDone)
 			timer := time.NewTimer(retryDelay)
 			select {
 			case <-timer.C:
@@ -1196,6 +1226,8 @@ func main() {
 			}
 			log.Printf("Invalid response from server: missing IP information, retrying in %v...", retryDelay)
 			client.Close()
+			authCancel()
+			close(authDone)
 			timer := time.NewTimer(retryDelay)
 			select {
 			case <-timer.C:
@@ -1214,6 +1246,10 @@ func main() {
 
 		// IMMEDIATELY set server configuration flags
 		if response.Status == "success" {
+			// Signal that authentication is complete
+			authCancel()
+			close(authDone)
+
 			// Server settings ALWAYS override defaults and command-line flags
 			keepSSH = response.KeepEstablishedSSH
 			killRoute = response.KillDefaultRoute
@@ -1370,8 +1406,8 @@ func main() {
 				// Add debugging/testing information
 				log.Printf("To test connectivity:")
 				log.Printf("  - Ping remote endpoint: ping %s", response.ServerIP)
-				log.Printf("  - DNS servers available: %s (doxx.net), 1.1.1.1, 8.8.8.8", response.ServerIP)
-				log.Printf("  - Test DNS resolution: dig @%s doxx.net", response.ServerIP)
+				log.Printf("  - DNS servers available: 10.10.10.10")
+				log.Printf("  - Test DNS resolution: dig @10.10.10.10 doxx")
 			}
 			connectionInfoDisplayed = true // Set this to true after displaying
 		}
@@ -1462,11 +1498,11 @@ func main() {
 					packetCopy := make([]byte, n)
 					copy(packetCopy, packet[:n])
 
-					if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP(response.ServerIP)) {
+					if !noSnarfDNS && isDNSPacket(packetCopy, net.ParseIP("10.10.10.10")) {
 						if debug {
 							debugLog("Processing DNS packet")
 						}
-						packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
+						packetCopy = rewriteDNSPacket(packetCopy, net.ParseIP("10.10.10.10"), dnsNatTable, tunDevice)
 						// Skip if packet was handled internally (nil return)
 						if packetCopy == nil {
 							continue
@@ -1499,14 +1535,14 @@ func main() {
 					}
 
 					var packetToWrite []byte
-					if !noSnarfDNS && isDNSPacket(packet, net.ParseIP(response.ServerIP)) {
+					if !noSnarfDNS && isDNSPacket(packet, net.ParseIP("10.10.10.10")) {
 						if debug {
 							debugLog("Processing DNS packet from transport")
 						}
 						// Create copy only for DNS packets that need modification
 						packetCopy := make([]byte, len(packet))
 						copy(packetCopy, packet)
-						packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP(response.ServerIP), dnsNatTable, tunDevice)
+						packetToWrite = rewriteDNSPacket(packetCopy, net.ParseIP("10.10.10.10"), dnsNatTable, tunDevice)
 					} else {
 						// Use original packet for non-DNS traffic
 						packetToWrite = packet
@@ -2444,7 +2480,7 @@ func performGeoLookup(onComplete func()) {
 		// Configure DNS resolver on macOS after geo lookup
 		if runtime.GOOS == "darwin" {
 			// Single, simpler configuration that we know works
-			resolverContent := []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch doxx\ntimeout 5")
+			resolverContent := []byte("nameserver 10.10.10.10\nnameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch doxx\ntimeout 5")
 
 			if err := exec.Command("sudo", "mkdir", "-p", "/etc/resolver").Run(); err == nil {
 				if tmpfile, err := os.CreateTemp("", "resolver"); err == nil {
