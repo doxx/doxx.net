@@ -10,7 +10,7 @@ Importantly, doxx.net goes beyond a traditional VPN—while the VPN provides ent
 
 When exiting the doxx.net backbone, traffic is securely NATed to the internet via the connected node. For instance, connecting to the mia.us.doxx.net node via WireGuard allows seamless communication with other users across any node on the network, requiring only a hostname or IP address. Additionally, interconnected users can securely utilize peer-to-peer applications, such as Signal voice calls, entirely within the doxx.net backbone. Staying within the doxx.net network also reduces your digital footprint and minimizes exposure by avoiding additional points of vulnerability associated with exiting to the public internet.
 
-Generally speaking staying insdie the doxx.net echosystem is the best way to stay secure and private.
+Generally speaking, staying inside the doxx.net ecosystem is the best way to stay secure and private.
 
 ```
                                   Public Internet
