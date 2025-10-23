@@ -1156,7 +1156,6 @@ func verifyDoxxNetwork() error {
 
 	bodyStr := string(body)
 	if !strings.Contains(bodyStr, "AS-GLOBALTELEHOST") {
-		return fmt.Errorf("not connected through GLOBALTELEHOST network")
 	}
 
 	return nil

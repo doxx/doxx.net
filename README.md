@@ -1,78 +1,90 @@
 ![doxx.net logo](/assets/doxx.net.logo.png)
 
-# **doxx.net (BETA): Advanced VPN, Parallel Internet, and De-Location Platform**
+✨ **Join the community** ✨ Get started with privacy and security by visiting [**www.doxx.net**](https://www.doxx.net)
 
-✨ **Join the FREE BETA!** ✨ Experience the future of privacy and security by visiting [**beta.doxx.net**](https://beta.doxx.net)
+[Discord](https://discord.gg/Gr9rByrEzZ) for support and updates.
 
-doxx.net is a comprehensive privacy and security platform combining a high-performance VPN service with a parallel internet featuring advanced location management capabilities. Users can connect to the doxx.net network through the dedicated client using vpn over: [https, https over CDN, tcp](https://docs.doxx.net/vpn_clients/doxx.net/), or [WireGuard](https://docs.doxx.net/vpn_clients/wireguard) which uses standard UDP. For optimal performance with low latency, the WireGuard connection is recommended. In network environments with high restrictions, the TCP or HTTPS or HTTPS over CDN VPN connection is recommended.
+doxx.net is a comprehensive privacy and security platform combining a high-performance VPN service with a parallel internet featuring advanced location management capabilities. Users can connect to the doxx.net network through the dedicated client using vpn over: https, https over CDN, tcp, or WireGuard which uses standard UDP. These are not reccomended for begginers! For easy setup please visit www.doxx.net and create an account and use the WireGuard system. 
 
-Importantly, doxx.net goes beyond a traditional VPN—while the VPN provides entry into the network, the real value lies within the secured, encrypted mesh network. Once connected, users can seamlessly access .doxx domains, utilize the dedicated gTLD, and leverage secure hosting. This mesh network enables secure interaction with other users and applications directly within doxx.net.
+Here you will find the experimental doxx.net open sourced clients for https, cdn, and tcp-encrypted sessions. These clients are designed to be used through the a0x13.doxx.net portal or the API.
 
-When exiting the doxx.net backbone, traffic is securely NATed to the internet via the connected node. For instance, connecting to the mia.us.doxx.net node via WireGuard allows seamless communication with other users across any node on the network, requiring only a hostname or IP address. Additionally, interconnected users can securely utilize peer-to-peer applications, such as Signal voice calls, entirely within the doxx.net backbone. Staying within the doxx.net network also reduces your digital footprint and minimizes exposure by avoiding additional points of vulnerability associated with exiting to the public internet.
+For more information on the doxx.net platform, please visit [**docs.doxx.net**](https://docs.doxx.net)
 
-Generally speaking staying insdie the doxx.net echosystem is the best way to stay secure and private.
+## Download
 
+Pre-compiled binaries are available for multiple platforms:
+
+- [**macOS**](bin/doxx.net-macOS.zip) - Universal binary for Intel and Apple Silicon
+- [**Linux**](bin/doxx.net-Linux.zip) - AMD64 and ARM64
+- [**Windows 10/11**](bin/doxx.net-Windows10-11.zip) - AMD64 and ARM64
+- [**FreeBSD**](bin/doxx.net-FreeBSD.zip) - AMD64 and ARM64
+- [**OpenBSD**](bin/doxx.net-OpenBSD.zip) - AMD64 and ARM64
+
+## Getting Started
+
+### Step 1: Create Your Tunnel
+
+Before using the doxx.net client, you need to create a tunnel and obtain your authentication token.
+
+**Option A: Using the Web Portal**
+
+1. Visit [**a0x13.doxx.net**](https://a0x13.doxx.net) and create an account
+2. Navigate to the **Experimental** section
+3. Create a new tunnel
+4. Copy your unique tunnel token (this is different from your account token)
+
+**Option B: Using the API**
+
+You can also manage your account and tunnels programmatically using the doxx.net API. See [**docs.doxx.net/api**](https://docs.doxx.net/api) for complete documentation.
+
+Example - Create an account:
+```bash
+curl -X POST https://a0x13.doxx.net/api/create_account \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "your_username",
+    "email": "your_email@example.com",
+    "password": "your_secure_password"
+  }'
 ```
-                                  Public Internet
-                                       ^
-                                       | NAT
-                                       |
-Client A (10.1.2.4) ----+      +------------+
-                        |      | ams.eu     |
-                        +----->| doxx.net   |
-                        |      | Node       |
-                        |      |            |
-Client B (10.1.2.3) <--+      +------------+
-                               | |
-                               | |
-                        +------------+
-           Pub Internet |  mia.us    |      www.yoursite.doxx
-                   <----| doxx.net   |---- Client C (10.1.2.5)
-                        |   Node     |
-                        +------------+
 
-         Direct P2P communication possible
-         between clients on the network
+### Step 2: Download and Setup
+
+1. Download the appropriate binary for your platform (see Download section above)
+2. Extract the zip file
+
+**macOS / Linux / FreeBSD / OpenBSD:**
+```bash
+# Make the binary executable
+chmod +x doxx.net
 ```
-### Key Features & Benefits
 
-#### 🌐 Network Architecture
-- Parallel Internet infrastructure
-- Static doxx.net IP Assignment for stable internal connections
-- Automatic routing management for optimal performance
-- Multiple transport options including HTTPS, TCP, and WireGuard
-- Cloudflare CDN integration for traffic obfuscation
-- Cross-platform support for Linux, macOS, BSD, and Windows
+**Windows:**
+No additional setup required - just extract and run.
 
-#### 🔒 Security & Privacy
-- Deep packet inspection resistance
-- AI-based traffic analysis protection
-- Certificate pinning to prevent man-in-the-middle attacks
-- Complete isolation from internet-based attacks
-- Compromised host detection with NXDOMAIN tracking
-- Real-time visibility through Security Console
-- No public footprint for internal services
-- No dependence on public domain registrars
-- Immune to domain seizures and DNS blocking
+### Step 3: Connect to doxx.net
 
-#### 🛡️ Built-in Protections
-- Advanced DNS protection against tracking
-- Comprehensive ad blocking
-- Pixel tracking prevention
-- Malware Command & Control (C2) protection (coming soon)
-- SNI defense mechanisms (coming soon)
+Use the `-token` and `-server` flags to connect. The server address must include the port (typically `:443`).
 
-#### 🌍 Access & Control
-- Bypass network restrictions and censorship
-- Location spoofing and geo-unblocking
-- Browser fingerprint manipulation
-- Granular access control and permissions
-- Secure and private communication channels
-  
-#### Cool Portal Features
-doxx.net features a real-time [security console](https://docs.doxx.net/a0x13/security-console) that delivers enriched data without compromising your privacy or exposing your data.
+**macOS / Linux / FreeBSD / OpenBSD:**
+```bash
+# TCP Encrypted (Recommended)
+sudo ./doxx.net -token YOUR_TUNNEL_TOKEN -server tcp-encrypted.mia.us.doxx.net:443
 
-![Security Console Interface](https://docs.doxx.net/assets/security_console.gif)
+# HTTPS
+sudo ./doxx.net -token YOUR_TUNNEL_TOKEN -server https.mia.us.doxx.net:443
+```
+
+**Windows (Run as Administrator):**
+```cmd
+# TCP Encrypted (Recommended)
+doxx.net.exe -token YOUR_TUNNEL_TOKEN -server tcp-encrypted.mia.us.doxx.net:443
+
+# HTTPS
+doxx.net.exe -token YOUR_TUNNEL_TOKEN -server https.mia.us.doxx.net:443
+```
+
+> **Note:** Replace `YOUR_TUNNEL_TOKEN` with the token you received when creating your tunnel on a0x13.doxx.net
 
 ---
 
@@ -80,11 +92,6 @@ doxx.net features a real-time [security console](https://docs.doxx.net/a0x13/sec
 
 ---
 
-Where most VPNs act more like a proxy, doxx.net is a true parallel internet. You can currently connect to the doxx.net network using either the propritary doxx.net client or a WireGuard® client. Once connected, you can create your own network infrastructure, operate services entirely within the alternative internet, and no dependence on public domain registrars.
-
-It's pretty easy: You can use the [a0x13.doxx.net](https://a0x13.doxx.net) portal to create your own private network infrastructure, or you can use the API to create your own private network infrastructure. The [API](https://docs.doxx.net/api/) is more for the hacker types where the portal is more for the average user.
-
-
 ## Community
 
-We are more than just a VPN. We are a community of like-minded individuals who are passionate about privacy and security. Software development is on-going and features are still being created. Join our community on [Discord](https://discord.gg/Gr9rByrEzZ) for support and updates.
+We are a community of like-minded individuals who are passionate about privacy and security. Software development is on-going and features are still being created. Join our community on [Discord](https://discord.gg/Gr9rByrEzZ) for support and updates.
