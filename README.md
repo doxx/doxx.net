@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doxxcorp/style/main/logo-png/imagotype-black/imagotype-black-512.png" alt="doxx.net" width="300">
+  <img src="https://raw.githubusercontent.com/doxxcorp/style/main/logo-png/imagotype-white/imagotype-white-512.png" alt="doxx.net" width="300">
 </p>
 
 <h3 align="center">Freedom and Privacy by Design</h3>
