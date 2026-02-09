@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doxx/doxx.net-style/main/logo-png/imagotype-white/imagotype-white-512.png" alt="doxx.net" width="300">
+  <img src="https://raw.githubusercontent.com/doxx/doxx.net/main/assets/imagotype-white-512.png" alt="doxx.net" width="300">
 </p>
 
 <h3 align="center">Freedom and Privacy by Design</h3>
@@ -43,7 +43,6 @@ The web portal ([a0x13.doxx.net](https://a0x13.doxx.net)) provides full control 
 | Resource | Description |
 |----------|-------------|
 | [doxx.net-api-docs](https://github.com/doxx/doxx.net-api-docs) | Full API reference: Config API, Stats API, Conntrack API with curl examples and workflows |
-| [doxx.net-style](https://github.com/doxx/doxx.net-style) | Brand assets, logos (PNG/JPG/SVG/Swift), color system, typography, and style guidelines |
 
 ---
 
