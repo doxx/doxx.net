@@ -1,45 +1,101 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doxxcorp/style/main/logo-png/imagotype-white/imagotype-white-512.png" alt="doxx.net" width="300">
+  <img src="https://raw.githubusercontent.com/doxx/doxx.net-style/main/logo-png/imagotype-white/imagotype-white-512.png" alt="doxx.net" width="300">
 </p>
 
 <h3 align="center">Freedom and Privacy by Design</h3>
 
+<p align="center">
+  <a href="https://doxx.net">Website</a> &middot;
+  <a href="https://a0x13.doxx.net">Portal</a> &middot;
+  <a href="https://discord.gg/Gr9rByrEzZ">Discord</a> &middot;
+  <a href="https://doxx.net/terms">Terms</a> &middot;
+  <a href="https://doxx.net/privacy">Privacy</a>
+</p>
+
 ---
 
-## This repository has been deprecated
+## What is doxx.net?
 
-doxx.net development has moved to the **[doxxcorp](https://github.com/doxxcorp)** organization.
+doxx.net is a privacy network and device management platform. It provides encrypted tunnels, DNS blocking, firewall rules, domain hosting, and real-time security monitoring across all your devices.
 
-### What happened?
+The platform runs on a global backbone with servers in the US, Europe, and Asia. Clients are available for iOS, macOS, Android, and any device that supports WireGuard.
 
-This repo contained the original open-source experimental VPN clients for doxx.net. As the project has grown into a full platform with native mobile apps, multi-transport tunneling, and a parallel internet infrastructure, we've reorganized under a proper GitHub organization.
+The web portal ([a0x13.doxx.net](https://a0x13.doxx.net)) provides full control over tunnels, DNS settings, firewall rules, proxy configuration, domains, and security dashboards.
 
-### Where to go now
+---
 
-- **Organization:** [github.com/doxxcorp](https://github.com/doxxcorp)
-- **Website:** [doxx.net](https://doxx.net)
-- **Discord:** [Join our community](https://discord.gg/Gr9rByrEzZ)
-- **Support:** support@doxx.net
+## Platform Features
 
-### Open Source Projects
+- **Encrypted Tunnels**: WireGuard-based tunnels with automatic IPv4/IPv6 allocation
+- **DNS Blocking**: Per-tunnel blocklist subscriptions (malware, ads, tracking, phishing) with custom whitelists and blacklists
+- **Secure DNS (DoH/DoT)**: Personalized DNS-over-HTTPS and DNS-over-TLS for any device, no tunnel required
+- **Firewall Rules**: Per-tunnel protocol/port filtering with link-all mesh networking between your devices
+- **Domain Hosting**: Register domains on 196 TLDs (.doxx, .crypto, .eth, .onion, .vpn, and more) with full DNS management
+- **Certificate Signing**: TLS certificates signed by the doxx.net root CA for your domains
+- **Proxy / De-Location**: Transparent geo-spoofing with configurable location, timezone, language, and browser fingerprint
+- **Real-Time Monitoring**: Live bandwidth, security events, DNS blocks, and connection tracking via WebSocket
+- **Multi-Device Management**: Link devices to a single subscription with transfer and swap capabilities
 
-These public repos are available under [doxxcorp](https://github.com/doxxcorp):
+---
+
+## Documentation
+
+| Resource | Description |
+|----------|-------------|
+| [doxx.net-api-docs](https://github.com/doxx/doxx.net-api-docs) | Full API reference: Config API, Stats API, Conntrack API with curl examples and workflows |
+| [doxx.net-style](https://github.com/doxx/doxx.net-style) | Brand assets, logos (PNG/JPG/SVG/Swift), color system, typography, and style guidelines |
+
+---
+
+## Open Source Tools
 
 | Project | Description |
 |---------|-------------|
-| [doxxcorp/style](https://github.com/doxxcorp/style) | Brand assets, logos, guidelines |
-| [doxxcorp/DevSocket](https://github.com/doxxcorp/DevSocket) | Real-time mobile debug log streaming |
+| [DarkFlare](https://github.com/doxx/darkflare) | TCP-over-CDN firewall piercing tool |
+| [WireSlammer](https://github.com/doxx/wireslammer) | WireGuard over anything (TCP, CDN, WebSocket): coming soon |
+| [blind](https://github.com/doxx/blind) | TCP-over-DNS tunnel |
+| [DevSocket](https://github.com/doxx/DevSocket) | Real-time mobile debug log streaming for iOS and Android |
+| [bombdrop](https://github.com/doxx/bombdrop) | Apple mDNS cache pressure tool |
+| [NOLO](https://github.com/doxx/NOLO) | AI-powered PTZ camera system |
+| [truffle](https://github.com/doxx/truffle) | AI detection and monitoring system |
 
-And on the founder's account:
+---
 
-| Project | Description |
-|---------|-------------|
-| [doxx/darkflare](https://github.com/doxx/darkflare) | TCP-over-CDN firewall piercing |
-| [doxx/blind](https://github.com/doxx/blind) | TCP-over-DNS tunnel |
+## DNS Infrastructure
 
-### Issues
+doxx.net operates its own global DNS with three layers:
 
-All issues from this repo have been migrated to [doxxcorp/clients](https://github.com/doxxcorp/clients/issues). Please file new issues there.
+| Layer | Addresses | Purpose |
+|-------|-----------|---------|
+| **Tunnel DNS** | `10.10.10.10`, `fd53::` | Personalized blocking for connected devices |
+| **Public Recursive** | `207.207.200.200`, `207.207.201.201` | Open resolver for anyone (resolves .doxx TLDs) |
+| **Authoritative** | `a.root-dx.net`, `a.root-dx.com`, `a.root-dx.org` | Root authority for all doxx.net TLDs |
+
+Public recursive DNS is available to anyone on the internet. No tunnel required to resolve `.doxx`, `.crypto`, `.eth`, or any of the 196 doxx.net TLDs:
+
+```bash
+dig A mysite.doxx @207.207.200.200 +short
+```
+
+---
+
+## Quick Start
+
+1. Visit [a0x13.doxx.net](https://a0x13.doxx.net) and create an account
+2. Create a tunnel and select a server
+3. Download the WireGuard config or use the iOS/macOS app
+4. Connect and start browsing with DNS protection
+
+For API access, see the [API documentation](https://github.com/doxx/doxx.net-api-docs).
+
+---
+
+## Contact
+
+- **Website**: [doxx.net](https://doxx.net)
+- **Portal**: [a0x13.doxx.net](https://a0x13.doxx.net)
+- **Discord**: [discord.gg/Gr9rByrEzZ](https://discord.gg/Gr9rByrEzZ)
+- **Support**: support@doxx.net
 
 ---
 
