@@ -16,7 +16,7 @@
 
 ## What is doxx.net?
 
-doxx.net is a privacy network and device management platform. It provides encrypted tunnels, DNS blocking, firewall rules, domain hosting, and real-time security monitoring across all your devices.
+doxx.net is a freedom of speech and privacy platform. It provides encrypted tunnels, DNS blocking, firewall rules, domain hosting, and real-time security monitoring across all your devices.
 
 The platform runs on a global backbone with servers in the US, Europe, and Asia. Clients are available for iOS, macOS, Android, and any device that supports WireGuard.
 
