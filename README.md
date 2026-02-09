@@ -53,11 +53,7 @@ The web portal ([a0x13.doxx.net](https://a0x13.doxx.net)) provides full control 
 |---------|-------------|
 | [DarkFlare](https://github.com/doxx/darkflare) | TCP-over-CDN firewall piercing tool |
 | [WireSlammer](https://github.com/doxx/wireslammer) | WireGuard over anything (TCP, CDN, WebSocket): coming soon |
-| [blind](https://github.com/doxx/blind) | TCP-over-DNS tunnel |
 | [DevSocket](https://github.com/doxx/DevSocket) | Real-time mobile debug log streaming for iOS and Android |
-| [bombdrop](https://github.com/doxx/bombdrop) | Apple mDNS cache pressure tool |
-| [NOLO](https://github.com/doxx/NOLO) | AI-powered PTZ camera system |
-| [truffle](https://github.com/doxx/truffle) | AI detection and monitoring system |
 
 ---
 
