@@ -8,8 +8,8 @@
   <a href="https://doxx.net">Website</a> &middot;
   <a href="https://a0x13.doxx.net">Portal</a> &middot;
   <a href="https://discord.gg/Gr9rByrEzZ">Discord</a> &middot;
-  <a href="https://doxx.net/terms">Terms</a> &middot;
-  <a href="https://doxx.net/privacy">Privacy</a>
+  <a href="https://a0x13.doxx.net/terms/">Terms</a> &middot;
+  <a href="https://a0x13.doxx.net/privacy/">Privacy</a>
 </p>
 
 ---
