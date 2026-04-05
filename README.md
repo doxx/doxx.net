@@ -42,7 +42,7 @@ The web portal ([a0x13.doxx.net](https://a0x13.doxx.net)) provides full control 
 
 | Resource | Description |
 |----------|-------------|
-| [doxx.net-api-docs](https://github.com/doxx/doxx.net-api-docs) | Full API reference: Config API, Stats API, Conntrack API with curl examples and workflows |
+| [config.doxx.net](https://github.com/doxxcorp/config.doxx.net) | Full API reference: Config API, Stats API with curl examples and workflows |
 
 ---
 
@@ -81,7 +81,7 @@ dig A mysite.doxx @207.207.200.200 +short
 3. Download the WireGuard config or use the iOS/macOS app
 4. Connect and start browsing with DNS protection
 
-For API access, see the [API documentation](https://github.com/doxx/doxx.net-api-docs).
+For API access, see the [API documentation](https://github.com/doxxcorp/config.doxx.net).
 
 ---
 
